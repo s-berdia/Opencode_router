@@ -32,10 +32,7 @@ body:
     id: router-version
     attributes:
       label: Router version
-      description: >
-        The "version" value in
-        ~/.cache/opencode/packages/@s-berdia/opencode-router@latest/node_modules/@s-berdia/opencode-router/package.json,
-        or the version in your plugin entry.
+      description: Type `/routing-status` in OpenCode, or run `npx @s-berdia/opencode-router status`.
       placeholder: 1.1.0
     validations:
       required: true

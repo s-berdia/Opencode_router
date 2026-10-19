@@ -8,7 +8,7 @@ import { installCommands } from "./install.js"
 import { runEval } from "./eval.js"
 import { editJsonFile, globalRouterConfigFile, isProjectDir, projectRouterConfigFile, readJson } from "./paths.js"
 import { ledgerFile, readApplyMarker } from "./state.js"
-import { PACKAGE_NAME, checkForUpdate, clearOutdatedCopies, fetchLatestVersion, updateNotice } from "./update.js"
+import { PACKAGE_NAME, checkForUpdate, clearOutdatedCopies, fetchLatestVersion, installedVersion, updateNotice } from "./update.js"
 import { isPlan, PLAN_PROFILES } from "./types.js"
 import type { ConfigScope, PlanProfile } from "./types.js"
 
@@ -157,15 +157,18 @@ async function cmdStatus(opts: CommonOpts): Promise<number> {
   const result = await build(opts)
   const ledger = new LedgerStore(ledgerFile())
   const rows = statusRows(result, ledger)
+  const version = installedVersion()
 
   // The free plan has no Go allowance.
   const allowance = result.cfg.plan === "free" ? undefined : ledger.allowance()
 
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ table: result.table, rows, allowance: allowance ?? null }, null, 2) + "\n")
+    process.stdout.write(
+      JSON.stringify({ version, table: result.table, rows, allowance: allowance ?? null }, null, 2) + "\n",
+    )
   } else {
     const status = allowance && { usage: allowance, softThreshold: result.cfg.softThreshold }
-    process.stdout.write(formatStatus(result.table, rows, status) + "\n")
+    process.stdout.write(formatStatus(result.table, rows, status, version) + "\n")
     await writeUpdateNotice(opts)
   }
   return 0

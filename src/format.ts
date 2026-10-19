@@ -2,6 +2,7 @@ import { ROLE_NAMES } from "./types.js"
 import type { RankingEntry, RoutingTable } from "./types.js"
 import type { StatusRow } from "./engine.js"
 import type { AllowanceUsage } from "./ledger.js"
+import { installedVersion } from "./update.js"
 
 function fmtTokens(value: number | null): string {
   if (value === null) return "unlimited"
@@ -79,10 +80,16 @@ export interface AllowanceStatus {
   softThreshold: number
 }
 
-export function formatStatus(table: RoutingTable, rows: StatusRow[], allowance?: AllowanceStatus): string {
+export function formatStatus(
+  table: RoutingTable,
+  rows: StatusRow[],
+  allowance?: AllowanceStatus,
+  version: string = installedVersion(),
+): string {
   const lines: string[] = []
   lines.push(`## opencode-router status`)
   lines.push("")
+  lines.push(`- Version: ${version}`)
   lines.push(`- Plan: **${table.plan}**`)
   if (allowance) {
     const { usage } = allowance

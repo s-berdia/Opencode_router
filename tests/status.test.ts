@@ -2,8 +2,10 @@ import fs from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { allowanceShare, buildRoutingTable, statusRows } from "../src/engine.js"
+import { formatStatus } from "../src/format.js"
 import { LedgerStore } from "../src/ledger.js"
 import { emptyFeedScores } from "../src/scoring.js"
+import { installedVersion } from "../src/update.js"
 import { globalOpencodeDir, routedCatalog } from "./helpers.js"
 
 function build(plan: "go" | "free" = "go") {
@@ -61,6 +63,16 @@ describe("statusRows", () => {
 
     expect(row.entry?.id).toBe(result.table.active.build![0]!.id)
     expect(row.state).toBe("limited")
+  })
+})
+
+describe("formatStatus", () => {
+  it("shows the router version under the heading", async () => {
+    const result = await build()
+    const rows = statusRows(result, ledger())
+    const text = formatStatus(result.table, rows)
+
+    expect(text).toContain(`## opencode-router status\n\n- Version: ${installedVersion()}\n- Plan: **go**`)
   })
 })
 

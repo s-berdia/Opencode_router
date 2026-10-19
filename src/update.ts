@@ -107,38 +107,67 @@ export interface ClearResult {
   failed: Array<{ dir: string; error: string }>
 }
 
+function readCachedVersion(dir: string, scope: string, name: string, generational: boolean): string {
+  if (generational) {
+    let entries: string[] = []
+    try {
+      entries = fs.readdirSync(dir)
+    } catch {
+      return "0.0.0"
+    }
+    const numeric = entries.filter((entry) => /^\d+$/.test(entry)).toSorted((a, b) => Number(a) - Number(b))
+    const fallbackDirs = entries.filter((entry) => !entry.startsWith(".") && entry !== "node_modules").toSorted()
+    const latestGeneration = numeric.at(-1) ?? fallbackDirs.at(-1)
+    if (latestGeneration) {
+      const genManifest = path.join(dir, latestGeneration, "node_modules", scope, name, "package.json")
+      const genVersion = readJson<{ version?: string }>(genManifest)?.version
+      if (genVersion) return genVersion
+    }
+  }
+  const manifest = path.join(dir, "node_modules", scope, name, "package.json")
+  return readJson<{ version?: string }>(manifest)?.version ?? "0.0.0"
+}
+
 /**
  * Remove OpenCode's cached copies of this package that are older than `latest`.
- * OpenCode 1.19 keeps them in <cache>/packages/@s-berdia/<spec>/node_modules/.
+ * Supports both OpenCode 1.19 (`<cache>/packages/@s-berdia/<spec>/node_modules/`)
+ * and the generational npm cache (`<cache>/npm/@s-berdia/<spec>/<generation>/node_modules/`).
  */
 export function clearOutdatedCopies(latest: string): ClearResult {
   const [scope, name] = PACKAGE_NAME.split("/") as [string, string]
-  const scopeDir = path.join(opencodeCacheDir(), "packages", scope)
+  const cacheRoot = opencodeCacheDir()
+  const layouts = [
+    { scopeDir: path.join(cacheRoot, "packages", scope), generational: false },
+    { scopeDir: path.join(cacheRoot, "npm", scope), generational: true },
+  ]
   const result: ClearResult = { removed: [], pinned: [], current: [], failed: [] }
-  let entries: string[] = []
-  try {
-    entries = fs.readdirSync(scopeDir)
-  } catch {
-    return result
-  }
-  for (const entry of entries) {
-    const dir = path.join(scopeDir, entry)
-    if (entry === name || entry === `${name}@latest`) {
-      const manifest = path.join(dir, "node_modules", scope, name, "package.json")
-      const version = readJson<{ version?: string }>(manifest)?.version ?? "0.0.0"
-      if (!isNewerVersion(latest, version)) {
-        result.current.push(dir)
-        continue
+
+  for (const { scopeDir, generational } of layouts) {
+    let entries: string[] = []
+    try {
+      entries = fs.readdirSync(scopeDir)
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      const dir = path.join(scopeDir, entry)
+      if (entry === name || entry === `${name}@latest`) {
+        const version = readCachedVersion(dir, scope, name, generational)
+        if (!isNewerVersion(latest, version)) {
+          result.current.push(dir)
+          continue
+        }
+        try {
+          fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
+          result.removed.push(dir)
+        } catch (error) {
+          result.failed.push({ dir, error: error instanceof Error ? error.message : String(error) })
+        }
+      } else if (entry.startsWith(`${name}@`) && isNewerVersion(latest, entry.slice(name.length + 1))) {
+        if (!result.pinned.includes(entry)) result.pinned.push(entry)
       }
-      try {
-        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 })
-        result.removed.push(dir)
-      } catch (error) {
-        result.failed.push({ dir, error: error instanceof Error ? error.message : String(error) })
-      }
-    } else if (entry.startsWith(`${name}@`) && isNewerVersion(latest, entry.slice(name.length + 1))) {
-      result.pinned.push(entry)
     }
   }
   return result
 }
+

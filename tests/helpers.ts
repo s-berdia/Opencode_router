@@ -187,10 +187,17 @@ export function stubRegistry(version: string): string[] {
   return calls
 }
 
+export interface CachedCopyOptions {
+  layout?: "packages" | "npm"
+  generation?: string
+}
+
 /** A copy of the package in the OpenCode plugin cache, in the folder for `spec`. */
-export function cachedCopy(spec: string, version = "1.0.0"): string {
-  const dir = path.join(process.env.XDG_CACHE_HOME!, "opencode", "packages", "@s-berdia", spec)
-  const packageDir = path.join(dir, "node_modules", "@s-berdia", "opencode-router")
+export function cachedCopy(spec: string, version = "1.0.0", opts: CachedCopyOptions = {}): string {
+  const layout = opts.layout ?? "packages"
+  const dir = path.join(process.env.XDG_CACHE_HOME!, "opencode", layout, "@s-berdia", spec)
+  const root = layout === "npm" ? path.join(dir, opts.generation ?? "1710000000") : dir
+  const packageDir = path.join(root, "node_modules", "@s-berdia", "opencode-router")
   fs.mkdirSync(packageDir, { recursive: true })
   fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({ name: "@s-berdia/opencode-router", version }))
   return dir

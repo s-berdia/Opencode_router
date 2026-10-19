@@ -224,7 +224,7 @@ async function cmdUpdate(): Promise<number> {
   }
   for (const dir of removed) process.stdout.write(`Removed the cached copy: ${dir}\n`)
   if (removed.length > 0) {
-    process.stdout.write(`Restart OpenCode. It then installs opencode-router ${latest}.\n`)
+    process.stdout.write(`Restart OpenCode (or run "opencode plugin update"). It then installs opencode-router ${latest}.\n`)
   }
   if (pinned.length > 0) {
     process.stdout.write(

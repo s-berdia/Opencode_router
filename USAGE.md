@@ -587,7 +587,7 @@ If the slash commands do not work, close OpenCode and run this command. Then sta
 OpenCode again.
 
 ```bash
-npx @s-berdia/opencode-router@latest update
+npx --prefer-online @s-berdia/opencode-router@latest update
 ```
 
 This command works in PowerShell, CMD, Git Bash, macOS, and Linux.

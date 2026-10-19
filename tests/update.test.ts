@@ -140,7 +140,7 @@ describe("cli update", () => {
     expect(result).toBe(1)
     expect(stderr).toContain(latest)
     expect(stderr).toContain("EBUSY")
-    expect(stderr).toContain("npx @s-berdia/opencode-router@latest update")
+    expect(stderr).toContain("npx --prefer-online @s-berdia/opencode-router@latest update")
   })
 
   it("fails when npm cannot be reached", async () => {

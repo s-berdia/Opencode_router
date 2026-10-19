@@ -17,6 +17,7 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
 ]
 
 const OUTPUT_BEGIN = "---BEGIN ROUTER OUTPUT---"
+const OUTPUT_END = "---END ROUTER OUTPUT---"
 
 /** True for the prompt of a router slash command. */
 export function isRouterCommandPrompt(parts: readonly { type: string; text?: string }[]): boolean {
@@ -35,11 +36,12 @@ export function commandTemplate(args: string): string {
     "",
     "Rules:",
     "1. Do not run any command, script, or tool. Do not search for opencode-router on PATH.",
-    "2. Present the text between the markers to the user exactly as written.",
-    "3. Do not summarize, reformat, shorten, or reorganize it.",
+    "2. Reply with only the text between the markers, exactly as written.",
+    `3. Do not include the ${OUTPUT_BEGIN} or ${OUTPUT_END} marker lines in your reply, and do not add any text before or after.`,
+    "4. Do not summarize, reformat, shorten, or reorganize it.",
     "",
     OUTPUT_BEGIN,
     `!\`node "${cliScriptPath()}" ${args} --scope global\``,
-    "---END ROUTER OUTPUT---",
+    OUTPUT_END,
   ].join("\n")
 }

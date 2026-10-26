@@ -208,7 +208,7 @@ function cmdInstall(opts: CommonOpts): number {
   return 0
 }
 
-/** Compare OpenCode's cached copies, not this process: `npx ...@latest update` is always the newest. */
+/** Compare OpenCode's cached copies, not this process: `npx --prefer-online ...@latest update` is always the newest. */
 async function cmdUpdate(): Promise<number> {
   const latest = await fetchLatestVersion()
   if (!latest) {
@@ -219,7 +219,7 @@ async function cmdUpdate(): Promise<number> {
   const { removed, pinned, current, failed } = clearOutdatedCopies(latest)
   if (failed.length > 0) {
     for (const { dir, error } of failed) process.stderr.write(`error: could not remove ${dir} (${error})\n`)
-    process.stderr.write(`Close OpenCode, then run this command in a terminal: npx ${PACKAGE_NAME}@latest update\n`)
+    process.stderr.write(`Close OpenCode, then run this command in a terminal: npx --prefer-online ${PACKAGE_NAME}@latest update\n`)
     return 1
   }
   for (const dir of removed) process.stdout.write(`Removed the cached copy: ${dir}\n`)

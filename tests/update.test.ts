@@ -80,6 +80,26 @@ describe("clearOutdatedCopies", () => {
     expect(fs.existsSync(latest)).toBe(true)
   })
 
+  it("removes outdated copies and keeps current copies in the generational npm cache layout", () => {
+    const outdatedNpm = cachedCopy("opencode-router@latest", "1.1.0", { layout: "npm", generation: "1710000000" })
+    const pinnedNpm = cachedCopy("opencode-router@1.0.1", "1.0.1", { layout: "npm", generation: "1710000000" })
+
+    const result = clearOutdatedCopies("1.2.0")
+
+    expect(result.removed).toEqual([outdatedNpm])
+    expect(result.pinned).toEqual(["opencode-router@1.0.1"])
+    expect(fs.existsSync(outdatedNpm)).toBe(false)
+    expect(fs.existsSync(pinnedNpm)).toBe(true)
+  })
+
+  it("checks the highest numeric generation in the generational npm cache layout", () => {
+    cachedCopy("opencode-router@latest", "1.0.0", { layout: "npm", generation: "900" })
+    const currentNpm = cachedCopy("opencode-router@latest", "1.2.0", { layout: "npm", generation: "1000" })
+
+    expect(clearOutdatedCopies("1.2.0")).toEqual({ removed: [], pinned: [], current: [currentNpm], failed: [] })
+    expect(fs.existsSync(currentNpm)).toBe(true)
+  })
+
   it("finds nothing when OpenCode has no cached copy", () => {
     expect(clearOutdatedCopies("1.2.0")).toEqual({ removed: [], pinned: [], current: [], failed: [] })
   })
@@ -95,7 +115,21 @@ describe("cli update", () => {
     expect(result).toBe(0)
     expect(stdout).toContain("99.0.0")
     expect(stdout).toContain("Restart OpenCode")
+    expect(stdout).toContain("opencode plugin update")
     expect(fs.existsSync(latest)).toBe(false)
+  })
+
+  it("updates the router when OpenCode uses the generational npm cache layout", async () => {
+    stubRegistry("99.0.0")
+    const latestNpm = cachedCopy("opencode-router@latest", "1.0.0", { layout: "npm", generation: "1710000000" })
+
+    const { result, stdout } = await captureOutput(() => main(["update", "--scope", "global"]))
+
+    expect(result).toBe(0)
+    expect(stdout).toContain("99.0.0")
+    expect(stdout).toContain("Restart OpenCode")
+    expect(stdout).toContain("opencode plugin update")
+    expect(fs.existsSync(latestNpm)).toBe(false)
   })
 
   it("tells the user to change a pinned version", async () => {
@@ -117,6 +151,17 @@ describe("cli update", () => {
     expect(result).toBe(0)
     expect(stdout).toContain("newest version")
     expect(fs.existsSync(latest)).toBe(true)
+  })
+
+  it("keeps a generational npm cached copy when it has the newest version", async () => {
+    stubRegistry("99.0.0")
+    const latestNpm = cachedCopy("opencode-router@latest", "99.0.0", { layout: "npm", generation: "1710000000" })
+
+    const { result, stdout } = await captureOutput(() => main(["update"]))
+
+    expect(result).toBe(0)
+    expect(stdout).toContain("newest version")
+    expect(fs.existsSync(latestNpm)).toBe(true)
   })
 
   it("says so when OpenCode has no cached copy", async () => {

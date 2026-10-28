@@ -94,6 +94,20 @@ describe("plugin commands", () => {
 
     expect(output.message.model).toEqual(small)
   })
+
+  it("instructs slash-command replies not to include the router output marker lines", async () => {
+    writeCatalog()
+    const hooks = await OpencodeRouter(stubInput(makeProject()))
+    const cfg: Record<string, unknown> = {}
+    await hooks.config!(cfg as never)
+    const commands = cfg.command as Record<string, { model: string; template: string }>
+
+    for (const name of ["routing-status", "routing-update", "refresh-routing"]) {
+      const template = commands[name]!.template
+      expect(template).toMatch(/Do not include the ---BEGIN ROUTER OUTPUT--- or ---END ROUTER OUTPUT--- marker lines/i)
+      expect(template).toMatch(/Reply with only the text between the markers/i)
+    }
+  })
 })
 
 describe("plugin update notice", () => {

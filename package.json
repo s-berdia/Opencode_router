@@ -66,8 +66,11 @@
   },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.18.23",
+    "@opentui/core": "0.4.5",
+    "@opentui/solid": "0.4.5",
     "@types/node": "^22.10.2",
     "jsonc-parser": "^3.3.1",
+    "solid-js": "1.9.10",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"

@@ -559,7 +559,7 @@ Do not commit the `router/` folder. It contains your usage data.
 
 ## 11. Known limits
 
-These are the limits of version 1.2.0.
+These are the limits of version 1.3.0.
 
 1. The router sets the model of the `plan`, `build`, `general`, and `explore` agents at
    each message. If you select a different model by hand, the router replaces it. To
@@ -627,7 +627,7 @@ To select the version yourself, write it in the `plugin` list:
 
 ```json
 {
-  "plugin": ["@s-berdia/opencode-router@1.2.0"]
+  "plugin": ["@s-berdia/opencode-router@1.3.0"]
 }
 ```
 

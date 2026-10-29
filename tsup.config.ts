@@ -13,7 +13,7 @@ export default defineConfig({
   splitting: false,
   sourcemap: true,
   shims: false,
-  external: ["@opencode-ai/plugin"],
+  external: ["@opencode/plugin"],
   // Bundle jsonc-parser so users install no runtime dependencies. Its ESM
   // build must win: esbuild cannot follow the require() calls in its UMD build.
   noExternal: ["jsonc-parser"],

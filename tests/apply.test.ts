@@ -4,10 +4,10 @@ import { describe, expect, it } from "vitest"
 import { writeRoutingConfig } from "../src/apply.js"
 import { buildRoutingTable } from "../src/engine.js"
 import { emptyFeedScores } from "../src/scoring.js"
-import { makeProject, routedCatalog } from "./helpers.js"
+import { emptyHealth, makeProject, routedCatalog } from "./helpers.js"
 
 async function table() {
-  const { table } = await buildRoutingTable({ catalog: routedCatalog(), plan: "go", feeds: emptyFeedScores() })
+  const { table } = await buildRoutingTable({ catalog: routedCatalog(), plan: "go", feeds: emptyFeedScores(), health: emptyHealth() })
   return table
 }
 

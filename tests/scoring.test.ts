@@ -54,10 +54,21 @@ describe("modelClass", () => {
 })
 
 describe("resolveIntelligence", () => {
-  it("uses explicit table entries as override", () => {
+  it("uses the generated table entry as a benchmark score", () => {
     const m = model({ providerID: "opencode-go", modelID: "glm-5.2" })
-    const result = resolveIntelligence(m, table, emptyFeedScores())
-    expect(result.source).toBe("override")
+    const t = loadDefaultTable()
+    t.models["opencode-go/glm-5.2"] = { intelligence: 88 }
+    const result = resolveIntelligence(m, t, emptyFeedScores())
+    expect(result.source).toBe("benchmark")
     expect(result.value).toBe(88)
+  })
+
+  it("lets a user pin win over the generated entry", () => {
+    const m = model({ providerID: "opencode-go", modelID: "glm-5.2" })
+    const t = loadDefaultTable()
+    t.overrides = { "opencode-go/glm-5.2": { intelligence: 42 } }
+    const result = resolveIntelligence(m, t, emptyFeedScores())
+    expect(result.source).toBe("override")
+    expect(result.value).toBe(42)
   })
 })

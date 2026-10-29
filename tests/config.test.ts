@@ -1,12 +1,12 @@
 import fs from "node:fs"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
-import { mergeUserConfig } from "../src/config.js"
+import { mergeUserConfig, resolveConfig } from "../src/config.js"
 import { buildRoutingTable } from "../src/engine.js"
 import { resolveTable } from "../src/score-table.js"
 import { emptyFeedScores } from "../src/scoring.js"
 import type { RouterUserConfig } from "../src/types.js"
-import { globalOpencodeDir, routedCatalog } from "./helpers.js"
+import { emptyHealth, globalOpencodeDir, routedCatalog } from "./helpers.js"
 
 function writeGlobalConfig(text: string): void {
   const file = path.join(globalOpencodeDir(), "router.config.json")
@@ -15,7 +15,7 @@ function writeGlobalConfig(text: string): void {
 }
 
 function build() {
-  return buildRoutingTable({ catalog: routedCatalog(), feeds: emptyFeedScores() })
+  return buildRoutingTable({ catalog: routedCatalog(), feeds: emptyFeedScores(), health: emptyHealth() })
 }
 
 describe("resolveTable", () => {
@@ -63,9 +63,23 @@ describe("user config problems", () => {
     expect(table.notes.join("\n")).toMatch(/"updateCheck" must be true or false/)
   })
 
+  it("ignores an unknown mode and says so", async () => {
+    writeGlobalConfig(JSON.stringify({ mode: "turbo" }))
+    const { table } = await buildRoutingTable({ feeds: emptyFeedScores(), health: emptyHealth() })
+    expect(table.notes.join("\n")).toMatch(/"mode" must be one of auto \| failover \| off/)
+  })
+
+  it("resolves the mode with auto as the default", async () => {
+    writeGlobalConfig(JSON.stringify({}))
+    const resolved = resolveConfig({}, routedCatalog())
+    expect(resolved.mode).toBe("auto")
+    const explicit = resolveConfig({ mode: "failover" }, routedCatalog())
+    expect(explicit.mode).toBe("failover")
+  })
+
   it("names the real catalog path when no models are found", async () => {
     const file = path.join(process.env.XDG_CACHE_HOME!, "missing.json")
-    const { table } = await buildRoutingTable({ catalogFile: file, feeds: emptyFeedScores() })
+    const { table } = await buildRoutingTable({ catalogFile: file, feeds: emptyFeedScores(), health: emptyHealth() })
     expect(table.notes.join("\n")).toContain(file)
   })
 })

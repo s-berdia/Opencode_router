@@ -6,10 +6,10 @@ import { formatStatus } from "../src/format.js"
 import { LedgerStore } from "../src/ledger.js"
 import { emptyFeedScores } from "../src/scoring.js"
 import { installedVersion } from "../src/update.js"
-import { globalOpencodeDir, routedCatalog } from "./helpers.js"
+import { emptyHealth, globalOpencodeDir, routedCatalog } from "./helpers.js"
 
 function build(plan: "go" | "free" = "go") {
-  return buildRoutingTable({ catalog: routedCatalog(), plan, feeds: emptyFeedScores() })
+  return buildRoutingTable({ catalog: routedCatalog(), plan, feeds: emptyFeedScores(), health: emptyHealth() })
 }
 
 function ledger(): LedgerStore {

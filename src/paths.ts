@@ -1,6 +1,7 @@
 import os from "node:os"
 import path from "node:path"
 import fs from "node:fs"
+import { fileURLToPath } from "node:url"
 import { applyEdits, findNodeAtLocation, modify, parse, parseTree, printParseErrorCode, type ParseError } from "jsonc-parser"
 
 /** Global OpenCode config directory. Honors XDG_CONFIG_HOME like OpenCode does. */
@@ -20,6 +21,20 @@ export function opencodeCacheDir(): string {
 /** OpenCode model catalog cache written by the OpenCode CLI/desktop. */
 export function catalogCacheFile(): string {
   return path.join(opencodeCacheDir(), "models.json")
+}
+
+/**
+ * The committed score table that ships with the package. Resolved relative to
+ * this module, which puts it at the package root both in `src/` (tests) and in
+ * the bundled `dist/bin.js`.
+ */
+export function scoreTableFile(): string {
+  return fileURLToPath(new URL("../model-scores.json", import.meta.url))
+}
+
+/** The credentials file `opencode auth login` writes. */
+export function authFile(): string {
+  return path.join(os.homedir(), ".local", "share", "opencode", "auth.json")
 }
 
 export function globalRouterConfigFile(): string {

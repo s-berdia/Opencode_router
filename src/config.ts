@@ -1,9 +1,16 @@
-import { isPlan, isRoleName, PLAN_PROFILES } from "./types.js"
+import { isPlan, isRoleName, isRouterMode, PLAN_PROFILES, ROUTER_MODES } from "./types.js"
 import type { CatalogModel, PlanProfile, ResolvedConfig, RouterUserConfig } from "./types.js"
 import { globalRouterConfigFile, isPlainObject, projectRouterConfigFile, readJsonFile } from "./paths.js"
 
 const DEFAULT_SOFT_THRESHOLD = 0.85
 const DEFAULT_CHAIN_DEPTH = 4
+/**
+ * Reliability score for a model OpenCode's status page does not follow. It
+ * tracks six models per plan, so most of the catalog gets this value. Sitting
+ * near the fleet median keeps it neutral: an unmeasured model is not a broken
+ * model, just an unproven one.
+ */
+const DEFAULT_UNKNOWN_UPTIME = 85
 
 export interface LoadedUserConfig {
   config: RouterUserConfig
@@ -42,6 +49,7 @@ function sanitizeUserConfig(raw: Record<string, unknown>, file: string, notes: s
   }
 
   if (config.plan !== undefined && !isPlan(config.plan)) drop("plan", `must be one of ${PLAN_PROFILES.join(" | ")}`)
+  if (config.mode !== undefined && !isRouterMode(config.mode)) drop("mode", `must be one of ${ROUTER_MODES.join(" | ")}`)
   const depth = config.chainDepth
   if (depth !== undefined && !(typeof depth === "number" && Number.isInteger(depth) && depth >= 1)) {
     drop("chainDepth", "must be a whole number of 1 or more")
@@ -71,7 +79,37 @@ function sanitizeUserConfig(raw: Record<string, unknown>, file: string, notes: s
     }
     config[key] = known
   }
+  sanitizeStatus(config, file, notes)
   return config as RouterUserConfig
+}
+
+/** The `status` block: only values this router can act on survive. */
+function sanitizeStatus(config: Record<string, unknown>, file: string, notes: string[]): void {
+  const raw = config.status
+  if (raw === undefined) return
+  if (!isPlainObject(raw)) {
+    notes.push(`${file}: "status" must be an object; it was ignored.`)
+    delete config.status
+    return
+  }
+  const status: Record<string, unknown> = { ...raw }
+  const drop = (key: string, rule: string) => {
+    notes.push(`${file}: "status.${key}" ${rule}, not ${JSON.stringify(status[key])}; it was ignored.`)
+    delete status[key]
+  }
+  if (status.enabled !== undefined && typeof status.enabled !== "boolean") drop("enabled", "must be true or false")
+  if (status.url !== undefined && typeof status.url !== "string") drop("url", "must be a URL string")
+  if (status.timeoutMs !== undefined && !(typeof status.timeoutMs === "number" && status.timeoutMs > 0)) {
+    drop("timeoutMs", "must be a positive number of milliseconds")
+  }
+  // A percentage the router scores: 0-100.
+  for (const key of ["unknownUptime", "minUptime"]) {
+    const value = status[key]
+    if (value !== undefined && !(typeof value === "number" && value >= 0 && value <= 100)) {
+      drop(key, "must be a number from 0 to 100")
+    }
+  }
+  config.status = status
 }
 
 /** Merge two `key -> object` maps one level deep, so project values add to global ones. */
@@ -97,6 +135,7 @@ export function mergeUserConfig(base: RouterUserConfig, override: RouterUserConf
     scores: mergeByKey(base.scores, override.scores),
     privacy: { ...base.privacy, ...override.privacy },
     feeds: { ...base.feeds, ...override.feeds },
+    status: { ...base.status, ...override.status },
     denyModels: override.denyModels ?? base.denyModels,
     allowModels: override.allowModels ?? base.allowModels,
   }
@@ -116,6 +155,7 @@ export function resolveConfig(user: RouterUserConfig, catalog: CatalogModel[], c
   return {
     ...user,
     plan,
+    mode: user.mode ?? "auto",
     chainDepth: user.chainDepth ?? DEFAULT_CHAIN_DEPTH,
     softThreshold: user.softThreshold ?? DEFAULT_SOFT_THRESHOLD,
     blend: {
@@ -130,5 +170,13 @@ export function resolveConfig(user: RouterUserConfig, catalog: CatalogModel[], c
     denyModels: user.denyModels ?? [],
     allowModels: user.allowModels ?? [],
     privacy: { freeModelsOk: user.privacy?.freeModelsOk ?? true },
+    status: {
+      ...user.status,
+      // On by default: the endpoint is public, cached for five minutes, and a
+      // failure degrades to the neutral prior instead of breaking the rebuild.
+      enabled: user.status?.enabled ?? true,
+      timeoutMs: user.status?.timeoutMs ?? 5000,
+      unknownUptime: user.status?.unknownUptime ?? DEFAULT_UNKNOWN_UPTIME,
+    },
   }
 }

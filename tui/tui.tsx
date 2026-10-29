@@ -2,21 +2,32 @@
 /** @jsxImportSource @opentui/solid */
 import fs from "node:fs"
 import os from "node:os"
-import { createSignal, onCleanup } from "solid-js"
+import { createMemo, createSignal, onCleanup } from "solid-js"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import {
   buildHudState,
   hudColor,
+  hudDataPath,
   hudLine,
   ledgerPath,
   parseJsonSafe,
   routingTablePath,
   routerConfigPath,
   stateDirPath,
+  type HudFileData,
   type HudState,
+  type LedgerData,
+  type RoutingTableData,
 } from "./hud.js"
 
 const REFRESH_MS = 15_000
+
+export interface RawSnapshot {
+  ledger: LedgerData | undefined
+  table: RoutingTableData | undefined
+  config: unknown
+  hud: HudFileData | undefined
+}
 
 /** OpenCode never atomically writes these files; tolerate missing and half-written files. */
 function readText(file: string): string | undefined {
@@ -27,25 +38,26 @@ function readText(file: string): string | undefined {
   }
 }
 
-function readState(now: number): HudState | null {
-  try {
-    const home = os.homedir()
-    const dir = stateDirPath(process.env.XDG_CONFIG_HOME, home)
-    const ledger = parseJsonSafe(readText(ledgerPath(dir))) ?? undefined
-    const table = parseJsonSafe(readText(routingTablePath(dir))) ?? undefined
-    const config = parseJsonSafe(readText(routerConfigPath(dir)))
-    return buildHudState({ ledger, table, config, now })
-  } catch {
-    return null
+function readSnapshot(): RawSnapshot {
+  const home = os.homedir()
+  const dir = stateDirPath(process.env.XDG_CONFIG_HOME, home)
+  return {
+    ledger: parseJsonSafe(readText(ledgerPath(dir))) ?? undefined,
+    table: parseJsonSafe(readText(routingTablePath(dir))) ?? undefined,
+    config: parseJsonSafe(readText(routerConfigPath(dir))),
+    hud: parseJsonSafe(readText(hudDataPath(dir))) ?? undefined,
   }
 }
 
+const EMPTY: RawSnapshot = { ledger: undefined, table: undefined, config: undefined, hud: undefined }
+
 const tui: TuiPlugin = async (api) => {
-  const [state, setState] = createSignal<HudState | null>(null)
+  const [snapshot, setSnapshot] = createSignal<RawSnapshot>(EMPTY)
+  const [session, setSession] = createSignal<string | undefined>(undefined)
 
   const refresh = () => {
     try {
-      setState(readState(Date.now()))
+      setSnapshot(readSnapshot())
     } catch {
       /* never break the TUI */
     }
@@ -65,17 +77,22 @@ const tui: TuiPlugin = async (api) => {
     slots: {
       session_prompt_right(ctx, value) {
         void ctx
-        void value
-        const current = state()
-        if (!current) return <text fg="#808080"></text>
-        const fg = hudColor(current)
-        return <text fg={fg}>{hudLine(current, Date.now())}</text>
+        if (typeof value?.session_id === "string" && value.session_id) setSession(value.session_id)
+        const view = createMemo((): { fg: string; text: string } | null => {
+          const state = buildHudState({ ...snapshot(), sessionId: session(), now: Date.now() })
+          if (!state) return null
+          return { fg: hudColor(state), text: hudLine(state) }
+        })
+        return <text fg={view()?.fg ?? "#808080"}>{view()?.text ?? ""}</text>
       },
-      home_prompt_right() {
-        const current = state()
-        if (!current) return <text fg="#808080"></text>
-        const fg = hudColor(current)
-        return <text fg={fg}>{hudLine(current, Date.now())}</text>
+      home_prompt_right(ctx) {
+        void ctx
+        const view = createMemo((): { fg: string; text: string } | null => {
+          const state = buildHudState({ ...snapshot(), sessionId: undefined, now: Date.now() })
+          if (!state) return null
+          return { fg: hudColor(state), text: hudLine(state) }
+        })
+        return <text fg={view()?.fg ?? "#808080"}>{view()?.text ?? ""}</text>
       },
     },
   })

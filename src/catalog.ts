@@ -6,6 +6,7 @@ export interface RawModel {
   id: string
   name?: string
   family?: string
+  canonical_model_id?: string
   attachment?: boolean
   reasoning?: boolean
   tool_call?: boolean
@@ -93,6 +94,7 @@ export function mapModel(providerID: string, raw: RawModel): CatalogModel {
     id: `${providerID}/${raw.id}`,
     name: raw.name ?? raw.id,
     family: raw.family,
+    canonicalModelID: raw.canonical_model_id,
     releaseDate: raw.release_date ?? raw.last_updated,
     reasoning: raw.reasoning === true,
     toolCall: raw.tool_call === true,
@@ -128,6 +130,64 @@ export function loadCatalog(file: string = catalogCacheFile()): CatalogModel[] {
   return out
 }
 
+export interface DedupeResult {
+  catalog: CatalogModel[]
+  /** Human-readable note lines: `dropped X == Y; kept Y`. */
+  notes: string[]
+}
+
+/** The provider namespace kept when both twins exist and the classes tie. */
+const PREFERRED_PROVIDER = "opencode"
+
+function classOf(model: CatalogModel): "free" | "other" {
+  return model.free ? "free" : "other"
+}
+
+/**
+ * One model can appear under both routed providers (`opencode-go/beam-free` and
+ * `opencode/beam-free` are the same model). They must not occupy two chain
+ * slots. Preference: the free twin over a paid one, then the subscription twin
+ * for a paid pair, then the Zen namespace for the remaining ties.
+ *
+ * Preferring the subscription twin matters on the `go` plan: a paid Zen model
+ * is not eligible there, so keeping it would hide a model the subscription can
+ * use. On `go-plus` the subscription twin is also the cheaper path while the
+ * shared allowance lasts; when it runs out the chain falls through to its free
+ * and paid fallbacks.
+ */
+export function dedupeCatalog(models: CatalogModel[]): DedupeResult {
+  const notes: string[] = []
+  const byModelID = new Map<string, CatalogModel>()
+  for (const model of models) {
+    const twin = byModelID.get(model.modelID)
+    if (!twin) {
+      byModelID.set(model.modelID, model)
+      continue
+    }
+    // Pick the twin to keep; the loser is the drop note.
+    let keep = model
+    let drop = twin
+    if (classOf(twin) !== classOf(model)) {
+      // The free class wins over the paid one.
+      if (classOf(twin) === "free") {
+        keep = twin
+        drop = model
+      }
+    } else if (classOf(twin) === "other" && (twin.providerID === "opencode-go" || model.providerID === "opencode-go")) {
+      // Both paid: keep the Go subscription copy, which is included in the
+      // plan while its allowance lasts.
+      keep = twin.providerID === "opencode-go" ? twin : model
+      drop = keep === twin ? model : twin
+    } else if (twin.providerID === PREFERRED_PROVIDER) {
+      keep = twin
+      drop = model
+    }
+    byModelID.set(model.modelID, keep)
+    notes.push(`Dropped duplicate ${drop.id} == ${keep.id}; kept ${keep.id}`)
+  }
+  return { catalog: [...byModelID.values()], notes }
+}
+
 export function catalogMeta(file: string = catalogCacheFile()): { path: string; mtime: string | null; total: number } {
   let mtime: string | null = null
   try {
@@ -135,5 +195,5 @@ export function catalogMeta(file: string = catalogCacheFile()): { path: string; 
   } catch {
     mtime = null
   }
-  return { path: file, mtime, total: loadCatalog(file).length }
+  return { path: file, mtime, total: dedupeCatalog(loadCatalog(file)).catalog.length }
 }

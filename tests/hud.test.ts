@@ -99,10 +99,10 @@ test("hudLine renders a compact one-line HUD with a leading gap", () => {
     threshold: 0.85,
     plan: "go",
   }
-  expect(hudLine(state, Date.now())).toBe(" 17% █▁▁▁▁▁ → nemotron-3.5-lightning-free (free)")
-  expect(hudLine(state, Date.now(), 4)).toBe(" 17% █▁▁▁ → nemotron-3.5-lightning-free (free)")
+  expect(hudLine(state)).toBe(" 17% █▁▁▁▁▁ → nemotron-3.5-lightning-free (free)")
+  expect(hudLine(state, 4)).toBe(" 17% █▁▁▁ → nemotron-3.5-lightning-free (free)")
   const paid = { ...state, nextIsFree: false, nextModel: "opencode-go/deepseek-v4.1-flash", usage: { pct5h: 0.85, pctWeek: 0, pctMonth: 0, cooldown: false } }
-  expect(hudLine(paid, Date.now())).toBe(" 85% ██████ → deepseek-v4.1-flash")
+  expect(hudLine(paid)).toBe(" 85% ██████ → deepseek-v4.1-flash")
 })
 
 test("hudColor turns red on cooldown and amber at the threshold", () => {
@@ -150,17 +150,50 @@ test("buildHudState hides the widget without a build chain", () => {
     },
   }
   const ledger: LedgerData = { allowance: { buckets: [[Date.now() - HOUR, 0.05]] } }
-  const state = buildHudState({ ledger, table, config: undefined, now: Date.now() })
+  const state = buildHudState({ ledger, table, config: undefined, hud: undefined, now: Date.now() })
   expect(state?.activeModel).toBe("opencode-go/glm-5.3-flash")
   expect(state?.nextModel).toBe("opencode/nemotron-3.5-lightning-free")
   expect(state?.nextIsFree).toBe(true)
   expect(state?.plan).toBe("go")
 
-  expect(buildHudState({ ledger, table: { active: {} }, config: undefined, now: 0 })).toBeNull()
-  expect(buildHudState({ ledger, table: undefined, config: undefined, now: 0 })).toBeNull()
+  expect(buildHudState({ ledger, table: { active: {} }, config: undefined, hud: undefined, now: 0 })).toBeNull()
+  expect(buildHudState({ ledger, table: undefined, config: undefined, hud: undefined, now: 0 })).toBeNull()
   expect(
-    buildHudState({ ledger: undefined, table: { active: { build: [{ rank: 1 }] } }, config: undefined, now: 0 }),
+    buildHudState({ ledger: undefined, table: { active: { build: [{ rank: 1 }] } }, config: undefined, hud: undefined, now: 0 }),
   ).toBeNull()
+})
+
+test("buildHudState surfaces the mode and session manual pick", () => {
+  const table: RoutingTableData = { plan: "go", active: { build: [{ id: "opencode-go/glm-5.3-flash" }] } }
+  const hud = {
+    mode: "auto",
+    manual: { "s1:build": "opencode-go/deepseek-v4.1-flash", "s2:plan": "opencode/x" },
+    last: { s1: "opencode-go/deepseek-v4.1-flash" },
+  }
+  const manual = buildHudState({ ledger: undefined, table, config: undefined, hud, sessionId: "s1", now: 0 })
+  expect(manual?.manualModel).toBe("opencode-go/deepseek-v4.1-flash")
+  expect(hudLine(manual!)).toBe(" 0% ▁▁▁▁▁▁ in use deepseek-v4.1-flash (manual)")
+
+  const other = buildHudState({ ledger: undefined, table, config: undefined, hud, sessionId: "s9", now: 0 })
+  expect(other?.manualModel).toBeUndefined()
+  const none = buildHudState({ ledger: undefined, table, config: undefined, hud: { mode: "off" }, sessionId: "s1", now: 0 })
+  expect(none?.mode).toBe("off")
+  expect(none?.manualModel).toBeUndefined()
+})
+
+test("hudLine keeps the chain readout when no manual pick is active", () => {
+  const table: RoutingTableData = {
+    plan: "go",
+    active: {
+      build: [
+        { id: "opencode-go/glm-5.3-flash", rank: 1 },
+        { id: "opencode/nemotron-3.5-lightning-free", rank: 2 },
+      ],
+    },
+  }
+  const state = buildHudState({ ledger: undefined, table, config: undefined, hud: { mode: "auto" }, sessionId: "s1", now: 0 })
+  expect(state?.mode).toBe("auto")
+  expect(hudLine(state!)).toBe(" 0% ▁▁▁▁▁▁ → nemotron-3.5-lightning-free (free)")
 })
 
 test("parseJsonSafe survives BOM, noise, and absence", () => {

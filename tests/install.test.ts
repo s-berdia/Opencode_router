@@ -3,8 +3,8 @@ import os from "node:os"
 import path from "node:path"
 import { describe, expect, it } from "vitest"
 import { installCommands } from "../src/install.js"
-import OpencodeRouter from "../src/index.js"
-import { makeProject, stubInput, writeCatalog } from "./helpers.js"
+import { SLASH_COMMANDS } from "../src/commands.js"
+import { makeProject } from "./helpers.js"
 
 describe("installCommands", () => {
   it("keeps an existing router.config.json", () => {
@@ -26,26 +26,13 @@ describe("installCommands", () => {
     expect(withHome).toEqual([])
   })
 
-  it("passes --scope global only once in each command file", () => {
-    const result = installCommands("project", makeProject())
-    for (const file of result.files) {
-      const text = fs.readFileSync(file, "utf8")
-      expect(text.match(/--scope global/g)?.length ?? 0).toBeLessThanOrEqual(1)
-    }
-  })
-
-  it("writes the same command body that the plugin registers", async () => {
-    writeCatalog()
+  it("prepares the commands folder the plugin registers into", () => {
     const dir = makeProject()
-    const hooks = await OpencodeRouter(stubInput(dir))
-    const cfg: { command?: Record<string, { template: string }> } = {}
-    await hooks.config!(cfg as never)
-
     const result = installCommands("project", dir)
-    for (const file of result.files) {
-      const name = path.basename(file, ".md")
-      const body = fs.readFileSync(file, "utf8").split("---\n").slice(2).join("---\n").trim()
-      expect(body).toBe(cfg.command![name]!.template.trim())
+    expect(fs.existsSync(result.commandDir)).toBe(true)
+    expect(result.files).toEqual([])
+    for (const command of SLASH_COMMANDS) {
+      expect(fs.existsSync(path.join(result.commandDir, `${command.name}.md`))).toBe(false)
     }
   })
 })

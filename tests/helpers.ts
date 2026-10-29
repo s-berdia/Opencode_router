@@ -1,6 +1,8 @@
 import fs from "node:fs"
 import path from "node:path"
 import { vi } from "vitest"
+import RouterPlugin from "../src/index.js"
+import type { HealthMap } from "../src/status.js"
 import type { CatalogModel } from "../src/types.js"
 
 export function model(partial: Partial<CatalogModel> & { providerID: string; modelID: string }): CatalogModel {
@@ -11,6 +13,7 @@ export function model(partial: Partial<CatalogModel> & { providerID: string; mod
     id: `${providerID}/${modelID}`,
     name: partial.name ?? modelID,
     family: partial.family,
+    canonicalModelID: partial.canonicalModelID,
     reasoning: partial.reasoning ?? true,
     toolCall: partial.toolCall ?? true,
     attachment: partial.attachment ?? false,
@@ -78,6 +81,8 @@ const RAW_MODELS: Record<string, Record<string, RawSpec>> = {
     "deepseek-v4.1-flash": { family: "deepseek-flash", cost: [0.2, 0.8], context: 1000000 },
     "kimi-k3": { family: "kimi", cost: [2, 8], context: 256000 },
     "qwen3.8-flash": { family: "qwen-flash", cost: [0.4, 1.6], context: 256000 },
+    // Same model as opencode/beam-free: the router must keep one entry only.
+    "beam-free": { family: "beam", cost: [0, 0], context: 262144 },
   },
   opencode: {
     "nemotron-3.5-lightning-free": { family: "nemotron", cost: [0, 0], context: 1000000 },
@@ -117,6 +122,14 @@ export function writeCatalog(): string {
 }
 
 /** The fixture catalog as mapped models, for tests that call the engine directly. */
+/**
+ * An empty health map: no model is measured, so every one keeps the neutral
+ * prior. Tests pass this so a ranking never waits on the live status page.
+ */
+export function emptyHealth(): HealthMap {
+  return new Map()
+}
+
 export function routedCatalog(): CatalogModel[] {
   const out: CatalogModel[] = []
   for (const [providerID, models] of Object.entries(RAW_MODELS)) {
@@ -151,31 +164,188 @@ export function readJsonFile<T = Record<string, unknown>>(file: string): T {
   return JSON.parse(fs.readFileSync(file, "utf8")) as T
 }
 
-/** Minimal PluginInput for the plugin factory; `updates` and `toasts` collect client calls. */
-export function stubInput(dir: string, updates: unknown[] = [], toasts: unknown[] = []) {
-  return {
-    client: {
-      config: {
-        update: async (arg: unknown) => {
-          updates.push(arg)
-          return { data: {} }
-        },
+/** Agent/editor shapes the plugin's transform editors work on in tests. */
+type AnyRecord = Record<string, unknown>
+
+export interface StubRouter {
+  /** The stub v2 plugin context (cast when passed to setup). */
+  ctx: AnyRecord
+  directory: string
+  /** Registered transform/editor state: agent definitions by id. */
+  agents: Map<string, AnyRecord>
+  /** Registered commands of the command editor, by name. */
+  commands: Map<string, { name: string; description?: string; execute: (input: unknown) => Promise<void> }>
+  /** The registered prompt hook (the plugin's `chat.message` port). */
+  promptHook: ((event: unknown) => Promise<void>) | undefined
+  /** Sessions the plugin itself switched (`sessionID` -> `providerID/id`). */
+  switched: Array<{ sessionID: string; model: string }>
+  /** Synthetic messages the plugin posted (command output). */
+  synthetic: Array<{ sessionID: string; text: string }>
+  /** Session info the stub `ctx.session.get` returns from. */
+  sessions: Map<string, { agent?: string; model?: unknown }>
+  queued: Array<{ type: string; data?: unknown }>
+  /** Deliver one event to the plugin's subscriber. */
+  emit: (type: string, data?: unknown) => void
+  /** Replay the agent transforms (what `ctx.agent.reload()` does in OpenCode). */
+  agentReload: () => Promise<void>
+  dispose: () => Promise<void> | void
+}
+
+/** The default v2 agent list the router changes (build chain heads + internal helpers). */
+function defaultAgents(): Map<string, AnyRecord> {
+  const entries: Array<[string, AnyRecord]> = [
+    ["plan", { id: "plan" }],
+    ["build", { id: "build" }],
+    ["general", { id: "general" }],
+    ["explore", { id: "explore" }],
+    ["compaction", { id: "compaction" }],
+    ["title", { id: "title" }],
+    ["summary", { id: "summary" }],
+  ]
+  return new Map(entries)
+}
+
+function modelDefaultOf(map: Map<string, AnyRecord>): unknown {
+  const value = map.get("__default__")
+  return value?.model
+}
+
+/** Build the v2 plugin context the router registers against, and run setup. */
+export async function setupRouter(dir: string, agents = defaultAgents()): Promise<StubRouter> {
+  const agentEdits: Array<(editor: unknown) => void> = []
+  const modelEdits: Array<(editor: unknown) => void> = []
+  const router: StubRouter = {
+    ctx: {},
+    directory: dir,
+    agents,
+    commands: new Map(),
+    promptHook: undefined,
+    switched: [],
+    synthetic: [],
+    sessions: new Map(),
+    queued: [],
+    emit: (type, data) => {
+      router.queued.push({ type, data })
+    },
+    agentReload: async () => {
+      for (const callback of agentEdits) {
+        callback({
+          list: () => [...agents.values()],
+          get: (id: string) => agents.get(id),
+          default: (_id: string) => undefined,
+          update: (id: string, update: (agent: AnyRecord) => void) => {
+            update(hydrate(agents, id))
+          },
+          remove: (id: string) => agents.delete(id),
+        })
+      }
+    },
+    dispose: () => undefined,
+  }
+
+  const subscriber = {
+    next: async (): Promise<IteratorResult<unknown>> => {
+      while (router.queued.length === 0) {
+        if (aborted) return { value: undefined, done: true }
+        await new Promise((resolve) => setTimeout(resolve, 2))
+      }
+      const event = router.queued.shift()
+      return { value: event, done: false }
+    },
+    [Symbol.asyncIterator]() {
+      return subscriber
+    },
+  } as AsyncIterableIterator<unknown>
+  let aborted = false
+
+  function hydrate(map: Map<string, AnyRecord>, id: string): AnyRecord {
+    let entry = map.get(id)
+    if (!entry) {
+      entry = { id }
+      map.set(id, entry)
+    }
+    return entry
+  }
+
+  router.ctx = {
+    app: { name: "opencode", version: "2.2.0", channel: "latest" },
+    location: { directory: dir },
+    options: {},
+    agent: {
+      transform: async (callback: (editor: unknown) => void) => {
+        agentEdits.push(callback)
+        await router.agentReload()
+        return { dispose: async () => undefined }
       },
-      tui: {
-        showToast: async (arg: unknown) => {
-          toasts.push(arg)
-          return { data: true }
-        },
+      reload: () => router.agentReload(),
+      list: async () => [...agents.values()],
+    },
+    model: {
+      transform: async (callback: (editor: unknown) => void) => {
+        modelEdits.push(callback)
+        callback({
+          list: () => [],
+          get: () => undefined,
+          update: () => undefined,
+          remove: () => undefined,
+          default: {
+            get: () => modelDefaultOf(agents),
+            set: (providerID: string, id: string) => {
+              agents.set("__default__", { model: `${providerID}/${id}` })
+            },
+          },
+          provider: { list: () => [], get: () => undefined },
+        })
+        return { dispose: async () => undefined }
+      },
+      reload: async () => undefined,
+      default: async () => modelDefaultOf(agents),
+    },
+    command: {
+      transform: async (callback: (editor: unknown) => void) => {
+        callback({
+          add: (definition: { name: string; description?: string; execute: (input: unknown) => Promise<void> }) => {
+            router.commands.set(definition.name, definition)
+          },
+        })
+        return { dispose: async () => undefined }
+      },
+      reload: async () => undefined,
+      list: async () => [...router.commands.keys()],
+    },
+    session: {
+      hook: async (name: string, callback: (event: unknown) => Promise<void>) => {
+        if (name === "prompt") router.promptHook = callback
+        return { dispose: async () => undefined }
+      },
+      get: async (input: { sessionID: string }) => router.sessions.get(input.sessionID),
+      switchModel: async (input: { sessionID: string; model: { id: string; providerID: string } }) => {
+        router.switched.push({ sessionID: input.sessionID, model: `${input.model.providerID}/${input.model.id}` })
+        const info = router.sessions.get(input.sessionID) ?? {}
+        info.model = { id: input.model.id, providerID: input.model.providerID }
+        router.sessions.set(input.sessionID, info)
+      },
+      synthetic: async (input: { sessionID: string; text: string }) => {
+        router.synthetic.push(input)
       },
     },
-    project: { id: "p", worktree: dir, time: { created: 0 } },
-    directory: dir,
-    worktree: dir,
-    experimental_workspace: { register() {} },
-    serverUrl: new URL("http://127.0.0.1:0"),
-    $: (async () => ({})) as unknown,
-  } as never
+    event: {
+      subscribe: (options: { signal?: AbortSignal }) => {
+        if (options?.signal) {
+          options.signal.addEventListener("abort", () => {
+            aborted = true
+          })
+        }
+        return subscriber
+      },
+    },
+  }
+
+  const cleanup = await RouterPlugin.setup(router.ctx as never)
+  router.dispose = cleanup as () => Promise<void> | void
+  return router
 }
+
 
 /** Make the npm registry report `version` as the newest version. Returns the requested URLs. */
 export function stubRegistry(version: string): string[] {

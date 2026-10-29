@@ -1,11 +1,12 @@
 import { isAgentRole, PLAN_PROFILES, ROLE_NAMES } from "./types.js"
 import type { CatalogModel, PlanProfile, RankingEntry, ResolvedConfig, RoleChains, RoleName, RoutingTable, ScoreTable } from "./types.js"
-import { loadCatalog } from "./catalog.js"
+import { dedupeCatalog, loadCatalog } from "./catalog.js"
 import { loadFeedScores } from "./feeds.js"
 import { loadUserConfig, resolveConfig } from "./config.js"
 import { resolveTable } from "./score-table.js"
 import { rankRole } from "./rank.js"
 import { monthlyCapFor, type FeedScores } from "./scoring.js"
+import { healthForCatalog, loadStatusHealth, type HealthMap } from "./status.js"
 import { catalogCacheFile } from "./paths.js"
 import type { LedgerStore } from "./ledger.js"
 
@@ -16,6 +17,8 @@ export interface BuildOptions {
   catalog?: CatalogModel[]
   now?: Date
   feeds?: FeedScores
+  /** Live model health; fetched from the status page when omitted. */
+  health?: HealthMap
   notes?: string[]
 }
 
@@ -24,13 +27,17 @@ export interface BuildResult {
   cfg: ResolvedConfig
   scoreTable: ScoreTable
   catalog: CatalogModel[]
+  /** Live model health used for this build, by `provider/model` id. */
+  health: HealthMap
 }
 
 export async function buildRoutingTable(opts: BuildOptions = {}): Promise<BuildResult> {
   const catalogFile = opts.catalogFile ?? catalogCacheFile()
-  const catalog = opts.catalog ?? loadCatalog(catalogFile)
+  const raw = opts.catalog ?? loadCatalog(catalogFile)
+  const clean = dedupeCatalog(raw)
+  const catalog = clean.catalog
   const user = loadUserConfig(opts.projectDir)
-  const notes: string[] = [...(opts.notes ?? []), ...user.notes]
+  const notes: string[] = [...(opts.notes ?? []), ...user.notes, ...clean.notes]
 
   if (catalog.length === 0) {
     notes.push(`No models found in ${catalogFile}. Start OpenCode one time and sign in, then run this command again.`)
@@ -46,12 +53,22 @@ export async function buildRoutingTable(opts: BuildOptions = {}): Promise<BuildR
     if (loaded.note) notes.push(loaded.note)
   }
 
+  let health: HealthMap
+  if (opts.health) {
+    // A caller that measured health itself, or a test that wants none.
+    health = opts.health
+  } else {
+    const loaded = await loadStatusHealth(cfg)
+    health = healthForCatalog(loaded.uptime, catalog)
+    if (loaded.note) notes.push(loaded.note)
+  }
+
   const profiles: RoutingTable["profiles"] = {}
   for (const plan of PLAN_PROFILES) {
     const planCfg: ResolvedConfig = { ...cfg, plan }
     const chains: RoleChains = {}
     for (const role of ROLE_NAMES) {
-      chains[role] = rankRole(catalog, role, scoreTable, planCfg, feeds)
+      chains[role] = rankRole(catalog, role, scoreTable, planCfg, feeds, health)
     }
     profiles[plan] = chains
   }
@@ -65,7 +82,7 @@ export async function buildRoutingTable(opts: BuildOptions = {}): Promise<BuildR
     notes,
   }
 
-  return { table, cfg, scoreTable, catalog }
+  return { table, cfg, scoreTable, catalog, health }
 }
 
 /** The model a role should use right now: the first usable model of its chain. */

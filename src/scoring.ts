@@ -1,6 +1,5 @@
 import type {
   CatalogModel,
-  Metric,
   MetricScores,
   ModelClass,
   PlanProfile,
@@ -10,6 +9,7 @@ import type {
   ScoreTable,
   ScoredModel,
 } from "./types.js"
+import { uptimeScore, type HealthMap } from "./status.js"
 
 /** Share of the monthly allowance that one 5-hour window may use. */
 export const FIVE_HOUR_SHARE = 0.2
@@ -41,15 +41,29 @@ function clamp(value: number, min = 0, max = 100): number {
   return Math.max(min, Math.min(max, value))
 }
 
-/** Resolve one metric: score table/user override, then feed, then name pattern, then default. */
+/**
+ * The two metrics the score table and the name-pattern heuristics carry.
+ * `reliability` is deliberately not here: patterns can describe what a model is
+ * like, not how often it answers, which only a status feed can tell you.
+ */
+export type TableMetric = "intelligence" | "speed"
+
+/** Resolve one metric: explicit pin, generated table, feed, name pattern, then default. */
 function resolveMetric(
   model: CatalogModel,
   table: ScoreTable,
   feeds: FeedScores,
-  metric: Metric,
+  metric: TableMetric,
 ): { value: number; source: ScoreSource } {
-  const override = table.models[model.id]?.[metric]
-  if (override !== undefined) return { value: clamp(override), source: "override" }
+  const pinned = table.overrides?.[model.id]?.[metric]
+  if (pinned !== undefined) return { value: clamp(pinned), source: "override" }
+
+  const generated = table.models[model.id]?.[metric]
+  // `models` is the committed snapshot generated from public benchmarks. Speed
+  // is not a benchmark metric, so a speed value there is still a table pin.
+  if (generated !== undefined) {
+    return { value: clamp(generated), source: metric === "intelligence" ? "benchmark" : "table" }
+  }
 
   const fromId = feeds.byId.get(model.id.toLowerCase())?.[metric]
   if (fromId !== undefined) return { value: clamp(fromId), source: "feed" }
@@ -70,6 +84,33 @@ export function resolveIntelligence(model: CatalogModel, table: ScoreTable, feed
 
 export function resolveSpeed(model: CatalogModel, table: ScoreTable, feeds: FeedScores) {
   return resolveMetric(model, table, feeds, "speed")
+}
+
+/**
+ * How often the model actually works, 0-100.
+ *
+ * Resolved like the other metrics but sourced from OpenCode's status page
+ * rather than a benchmark table: seven-day uptime, per model, with degraded
+ * buckets counted as no uptime. A model the page does not follow gets
+ * `unknownUptime`, which sits near the fleet median so that an unmeasured model
+ * is neither rewarded nor punished for being unmeasured.
+ */
+export function resolveReliability(
+  model: CatalogModel,
+  table: ScoreTable,
+  cfg: ResolvedConfig,
+  health: HealthMap,
+): { value: number; source: ScoreSource } {
+  const pinned = table.overrides?.[model.id]?.reliability
+  if (pinned !== undefined) return { value: clamp(pinned), source: "override" }
+
+  const generated = table.models[model.id]?.reliability
+  if (generated !== undefined) return { value: clamp(generated), source: "table" }
+
+  const measured = health.get(model.id)
+  if (measured) return { value: clamp(uptimeScore(measured)), source: "status" }
+
+  return { value: clamp(cfg.status.unknownUptime), source: "default" }
 }
 
 /** Blended USD cost per 1M tokens for a typical coding turn. */
@@ -129,13 +170,27 @@ export function scoreModel(
   table: ScoreTable,
   cfg: ResolvedConfig,
   feeds: FeedScores,
+  health: HealthMap = new Map(),
 ): ScoredModel {
   const intel = resolveIntelligence(model, table, feeds)
   const speed = resolveSpeed(model, table, feeds)
   const end = resolveEndurance(model, table, cfg)
+  const rel = resolveReliability(model, table, cfg, health)
 
   const w = role.weights
-  let score = w.intelligence * intel.value + w.speed * speed.value + w.endurance * end.score
+  const wRel = w.reliability ?? 0
+  // Normalizing the weighted product keeps the score on the same 0-100 scale
+  // whether or not the role sets a reliability weight, so adding the pillar
+  // does not silently rescale every existing score. With the three legacy
+  // weights summing to 1 and no reliability weight, this divides by 1.
+  //
+  // The flat bonuses and penalties below are added AFTER that division, so
+  // they stay in points. Dividing them too would quietly shrink every
+  // preference the score table encodes, which is how a `+6` free bonus ended
+  // up worth 0.35 and free models fell out of the compaction chain.
+  const total = w.intelligence + w.speed + w.endurance + wRel || 1
+  let score =
+    (w.intelligence * intel.value + w.speed * speed.value + w.endurance * end.score + wRel * rel.value) / total
 
   // Plan/class preference: on paid plans keep the subscription models ahead of
   // the $0 overflow; for free-preferring roles do the opposite.
@@ -146,7 +201,9 @@ export function scoreModel(
     score += table.classPreference?.[cfg.plan]?.[klass] ?? 0
   }
   // Models we have never vetted score lower than ones with an explicit entry.
-  if (table.models[model.id] === undefined) score -= table.heuristics.unvettedPenalty ?? DEFAULT_UNVETTED_PENALTY
+  if (table.models[model.id] === undefined && table.overrides?.[model.id] === undefined) {
+    score -= table.heuristics.unvettedPenalty ?? DEFAULT_UNVETTED_PENALTY
+  }
   score = clamp(score)
 
   return {
@@ -154,10 +211,12 @@ export function scoreModel(
     intelligence: intel.value,
     speed: speed.value,
     endurance: end.score,
+    reliability: rel.value,
     score,
     intelligenceSource: intel.source,
     speedSource: speed.source,
     enduranceSource: end.source,
+    reliabilitySource: rel.source,
     blendedCost: end.blendedCost,
     tokensPer5h: end.tokensPer5h,
     monthlyCapUSD: end.monthlyCapUSD,

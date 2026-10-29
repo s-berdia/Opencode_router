@@ -51,11 +51,11 @@ Make sure that you have these items:
    ```
 
    The command downloads the plugin and adds `"@s-berdia/opencode-router"` to the
-   `plugin` list of your global config file.
+   `plugins` list of your global config file.
 2. Close OpenCode. Start OpenCode again.
 
 If the `opencode` command is not found, use Option B. Or install the command-line tool
-with `npm install -g opencode-ai`, and then do step 1 again.
+with `npm install -g @opencode/cli`, and then do step 1 again.
 
 ### Option B: from npm, by hand
 
@@ -79,22 +79,22 @@ with `npm install -g opencode-ai`, and then do step 1 again.
    to make a new file, click **Yes**.
 2. Make a backup copy of the file before you continue. The router writes the model keys
    in this file. It keeps your comments and all other settings.
-3. Add `"@s-berdia/opencode-router"` to the `plugin` list. If the file is empty, use all
+3. Add `"@s-berdia/opencode-router"` to the `plugins` list. If the file is empty, use all
    of this text:
 
    ```json
    {
      "$schema": "https://opencode.ai/config.json",
-     "plugin": ["@s-berdia/opencode-router"]
+     "plugins": ["@s-berdia/opencode-router"]
    }
    ```
 
-   If the file already has a `plugin` list, add the name to the list. Put a comma
-   between the items.
+   If the file already has a `plugins` list (OpenCode also accepts the older `plugin`
+   spelling), add the name to the list. Put a comma between the items.
 4. Save the file. Close the editor.
 5. Close OpenCode. Start OpenCode again. OpenCode downloads the plugin when it starts.
 
-To use the router in one project only, put the `plugin` entry in `opencode.json` in the
+To use the router in one project only, put the `plugins` entry in `opencode.json` in the
 root folder of that project, not in the global file.
 
 ### Option C: from source
@@ -127,8 +127,8 @@ Use this option to test changes to the code.
    ```
 
 3. In `opencode.json`, add the path as a `file:///` URL. Use forward slashes (`/`).
-   - Windows example: `"plugin": ["file:///C:/code/Opencode_router"]`
-   - macOS or Linux example: `"plugin": ["file:///home/alex/Opencode_router"]`
+   - Windows example: `"plugins": ["file:///C:/code/Opencode_router"]`
+   - macOS or Linux example: `"plugins": ["file:///home/alex/Opencode_router"]`
 4. Restart OpenCode. After each code change, run `npm run build` and restart OpenCode.
 
 ## 3. Do the first refresh
@@ -207,6 +207,15 @@ The **Notes** section under the table shows problems, for example a missing cata
 The router finds your plan from the models in your catalog. If it selects the wrong plan,
 set the plan:
 
+| Plan | Models the router may use |
+| :-- | :-- |
+| `free` | `opencode/*` models with `free: true` only |
+| `go` | every `opencode-go/*` model, plus `opencode/*` $0 models |
+| `go-plus` | the Go tier, plus paid `opencode/*` (pay-as-you-go) models |
+
+A paid `opencode/*` model is never eligible on `go` or `free`. On `go-plus` it is
+metered per token, not taken from the shared Go allowance.
+
 In OpenCode, type the command with your plan (`go`, `go-plus`, or `free`):
 
 ```text
@@ -281,6 +290,26 @@ use of the shared Go allowance reaches 70% in one of its windows (5 hours, 7 day
   "softThreshold": 0.7
 }
 ```
+
+### Keep control of the model choice
+
+`mode` sets how much the router decides per message:
+
+| `mode` | What happens |
+| :-- | :-- |
+| `auto` (default) | The router picks the model for each agent. When you pick a model in the OpenCode UI, your pick wins for that session: the router records its use and still handles limit errors, but it does not send you back. Run `/refresh-routing` to give control back to the router. |
+| `failover` | The router never picks a model for you. It only moves an agent to the next model in its chain after a rate-limit, quota, or authorization error, and moves it back when the cooldown ends. |
+| `off` | The router does not change models per message. It writes the config at install and `/refresh-routing` only. |
+
+```json
+{
+  "mode": "failover"
+}
+```
+
+A pick that differs from the model the router applied counts as a manual pick. The
+widget in the terminal shows ` in use <model> (manual)` for such sessions, and
+`/routing-status` shows the active mode.
 
 ### Change what is important for one agent
 
@@ -414,6 +443,9 @@ These commands work in PowerShell, CMD, Git Bash, macOS, and Linux.
 | `opencode-router refresh --plan free` | Use the `free` profile for this run only |
 | `opencode-router refresh --json` | Print the result as JSON |
 | `opencode-router status` | Show the model in use for each role (after failover) and the estimated use of the Go allowance |
+| `opencode-router scores --top` | Show where the committed scores come from and the winning model per archetype |
+| `opencode-router scores --write` | Regenerate `model-scores.json` from public benchmarks |
+| `opencode-router scores --check` | Exit 1 when the committed scores are out of date |
 | `opencode-router plan go-plus --scope global` | Save the plan in the global settings, then calculate and write the routing table |
 | `opencode-router cat` | Show the catalog path, its date, and the number of models |
 | `opencode-router install --scope global` | Write the slash commands as files in `~/.config/opencode/command/`. If `router.config.json` does not exist, it also writes an empty one |
@@ -459,34 +491,31 @@ its next message (in 15 seconds or less).
 writes a report that compares the predicted ranks with the measured results. The prompt
 is in [`evals/prompt.md`](./evals/prompt.md).
 
-1. Get your OpenCode API key.
-2. Set the key in the terminal. Do not write the key in a file that you commit.
+**You do not need a separate API key.** The test reuses the sign-in that OpenCode
+already knows (`~/.local/share/opencode/auth.json`, written when you run
+`opencode auth login` or sign in inside the app). If you signed in for the router to
+work, the test can already run.
 
-   PowerShell:
-
-   ```powershell
-   $env:OPENCODE_API_KEY = "<your-api-key>"
-   ```
-
-   Git Bash, macOS, or Linux:
+1. Make sure you are signed in at least for your plan's provider.
 
    ```bash
-   export OPENCODE_API_KEY="<your-api-key>"
+   opencode auth login
    ```
 
-3. Run the test from the same terminal:
+2. Run the test:
 
    ```bash
    npx @s-berdia/opencode-router eval --plan go
    ```
 
-4. Open the report: `~/.config/opencode/router/eval-report.md`.
+3. Open the report: `~/.config/opencode/router/eval-report.md`.
 
 **Caution:** The test sends up to 4 real requests. Each request can use up to 2000
 output tokens of your quota.
 
-If `OPENCODE_API_KEY` is not set, the test sends no requests. It writes only the
-predicted ranks.
+`OPENCODE_API_KEY` stays an optional override for a key that is not in the sign-in
+file. With no credential at all, the test sends no requests and writes only the
+predicted ranks. The predicted ranking is useful on its own and needs no key.
 
 ## 9. Files and folders
 
@@ -496,7 +525,7 @@ The router writes these files:
 | :-- | :-- | :-- |
 | `~/.config/opencode/router/ledger.json` | Plugin | Spend and tokens per model, the use of the shared Go allowance in the last 30 days, and cooldowns |
 | `~/.config/opencode/router/routing-table.json` | Plugin | The last routing table |
-| `~/.config/opencode/router/last-apply.json` | Plugin | The result of the last live apply |
+| `~/.config/opencode/router/last-apply.json` | Plugin | What the last apply did: what reloaded, or "applies on the next message" |
 | `~/.config/opencode/router/eval-report.md` | `/routing-eval` | The test report |
 | `~/.config/opencode/router/update-check.json` | Plugin, `status`, `refresh` | The time of the last update check and the newest version on npm |
 | `~/.config/opencode/opencode.json` | `/refresh-routing`, `/routing-plan` | `model`, `small_model`, and `agent.<role>.model` and `variant` |
@@ -526,7 +555,7 @@ Do not commit the `router/` folder. It contains your usage data.
 | "hot-apply failed: ..." | OpenCode did not accept the change | Restart OpenCode. The file `opencode.json` has the new models |
 | A model that you selected by hand changes back | The router selects the model at each message | See [Known limits](#11-known-limits) |
 | An agent uses a free model (`free-fallback` in `/routing-status`) | The Go allowance is near its limit, or a usage-limit error occurred | No action. The agent goes back to its first model when the use falls or the cooldown ends. To change the limit, set [`softThreshold`](#change-models-earlier-or-later) |
-| The scores look wrong | A model has no entry in `model-scores.json` | Run `npx @s-berdia/opencode-router refresh --dry-run --verbose`. If the source is `heuristic` or `default`, add the model to `scores` |
+| The scores look wrong | A model has no entry in `model-scores.json` | Run `npx @s-berdia/opencode-router refresh --dry-run --verbose`. If the source is `heuristic` or `default`, add the model to `scores`. For a benchmark-wide correction, run `opencode-router scores --top` and read [how models are selected](./model-selection.md) |
 
 ## 11. Known limits
 

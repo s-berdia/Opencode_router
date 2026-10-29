@@ -38,7 +38,10 @@ export function resolveTable(user: RouterUserConfig): ScoreTable {
   }
 
   for (const [id, score] of Object.entries(user.scores ?? {})) {
-    table.models[id] = { ...table.models[id], ...score }
+    // User scores are pins, not generated data: keep them out of `models` so a
+    // regenerated benchmark snapshot can never overwrite them.
+    table.overrides = table.overrides ?? {}
+    table.overrides[id] = { ...table.overrides[id], ...score }
   }
 
   return table

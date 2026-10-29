@@ -42,6 +42,16 @@ export interface RoutingTableData {
   active?: Record<string, ChainEntryData[] | undefined>
 }
 
+/** `hud.json`, written by the server plugin for the widget. */
+export interface HudFileData {
+  version?: number
+  mode?: string
+  /** `sessionID:agent` -> the model the user picked. */
+  manual?: Record<string, string>
+  /** `sessionID` -> the model of the last message in that session. */
+  last?: Record<string, string>
+}
+
 export interface AllowanceUsage {
   pct5h: number
   pctWeek: number
@@ -117,10 +127,30 @@ export interface HudState {
   plan: string
 }
 
-/** ` 9% ██▁▁▁▁ → nemotron (free)` — one compact HUD line. A leading space keeps a gap from the host text. */
-export function hudLine(state: HudState, now: number, barWidth = 6): string {
+export interface HudState {
+  activeModel: string
+  nextModel: string
+  nextIsFree: boolean
+  usage: AllowanceUsage
+  threshold: number
+  plan: string
+  /** Router mode from the server plugin; undefined when unknown. */
+  mode?: string
+  /** The model the user picked for this session; the router leaves it alone. */
+  manualModel?: string
+}
+
+/**
+ * ` 9% ██▁▁▁▁ → nemotron (free)` — one compact HUD line. A leading space keeps a gap from the host text.
+ * A manual pick replaces the chain readout: ` 9% ██▁▁▁▁ in use glm (manual)`.
+ */
+export function hudLine(state: HudState, barWidth = 6): string {
   const ratio = progressRatio(state.usage.pct5h, state.threshold)
   const pct = `${Math.round(state.usage.pct5h * 100)}%`
+  if (state.manualModel) {
+    const using = shortModel(state.manualModel) || "none"
+    return ` ${pct} ${bar(ratio, barWidth)} in use ${using} (manual)`
+  }
   const next = shortModel(state.nextModel) || "none"
   const free = state.nextIsFree ? " (free)" : ""
   return ` ${pct} ${bar(ratio, barWidth)} → ${next}${free}`
@@ -160,6 +190,10 @@ export function routingTablePath(stateDir: string): string {
   return `${stateDir}/routing-table.json`
 }
 
+export function hudDataPath(stateDir: string): string {
+  return `${stateDir}/hud.json`
+}
+
 export function routerConfigPath(stateDir: string): string {
   // stateDir is ".../opencode/router"; the config file lives beside it, not inside it.
   const clean = typeof stateDir === "string" ? stateDir.replace(/[\\/]+$/, "").replace(/[\\/]router$/, "") : ""
@@ -178,12 +212,19 @@ export function buildHudState(input: {
   ledger: LedgerData | undefined
   table: RoutingTableData | undefined
   config: unknown
+  hud: HudFileData | undefined
+  sessionId?: string
   now: number
 }): HudState | null {
   const chain = input.table?.active?.build
   const first = Array.isArray(chain) ? chain[0] : undefined
   if (!first || typeof first.id !== "string") return null
   const second = Array.isArray(chain) ? chain[1] : undefined
+  // Any manual pick in the session hides the chain readout: the router is not deciding.
+  const sessionKeys = input.sessionId
+    ? Object.keys(input.hud?.manual ?? {}).filter((key) => key.startsWith(`${input.sessionId}:`))
+    : []
+  const manualKey = sessionKeys[0]
   return {
     activeModel: first.id,
     nextModel: second?.id ?? "none",
@@ -191,5 +232,7 @@ export function buildHudState(input: {
     usage: allowanceUsage(input.ledger, input.now),
     threshold: readThreshold(input.config),
     plan: typeof input.table?.plan === "string" ? input.table.plan : "",
+    mode: typeof input.hud?.mode === "string" ? input.hud.mode : undefined,
+    manualModel: manualKey !== undefined ? input.hud?.manual?.[manualKey] : undefined,
   }
 }

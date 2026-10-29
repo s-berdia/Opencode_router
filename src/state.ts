@@ -25,6 +25,25 @@ export function updateCheckFile(): string {
   return path.join(stateDir(), "update-check.json")
 }
 
+/** Small state file the TUI widget reads: active mode, per-session manual picks, last model in use. */
+export function hudFile(): string {
+  return path.join(stateDir(), "hud.json")
+}
+
+export interface HudSnapshot {
+  version: 1
+  updatedAt: string
+  mode: string
+  /** `sessionID:agent` -> the model the user picked; the router leaves these alone. */
+  manual: Record<string, string>
+  /** `sessionID` -> the model of the last message in that session. */
+  last: Record<string, string>
+}
+
+export function writeHudSnapshot(snapshot: Omit<HudSnapshot, "version" | "updatedAt">): void {
+  writeJson(hudFile(), { version: 1, updatedAt: new Date().toISOString(), ...snapshot } satisfies HudSnapshot)
+}
+
 function applyMarkerFile(): string {
   return path.join(stateDir(), "last-apply.json")
 }

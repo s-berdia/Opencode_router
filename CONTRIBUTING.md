@@ -1,5 +1,9 @@
 # Contributing to opencode-router
 
+> **Early development.** opencode-router is alpha software with known gaps and bugs.
+> Contributions are not just welcome; they are how this project improves. Bug reports,
+> model-score corrections, documentation fixes, and code changes are all useful.
+
 Thank you for your help. This guide tells you how to report a problem, add a model
 score, and send a code change.
 

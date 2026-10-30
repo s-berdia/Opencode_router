@@ -3,7 +3,13 @@
 [![npm version](https://img.shields.io/npm/v/@s-berdia/opencode-router)](https://www.npmjs.com/package/@s-berdia/opencode-router)
 [![npm downloads](https://img.shields.io/npm/dm/@s-berdia/opencode-router)](https://www.npmjs.com/package/@s-berdia/opencode-router)
 [![CI](https://github.com/s-berdia/Opencode_router/actions/workflows/ci.yml/badge.svg)](https://github.com/s-berdia/Opencode_router/actions/workflows/ci.yml)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#development-status)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
+> **Early development.** opencode-router is under active development. Expect breaking
+> changes, incomplete model/provider support, and bugs. Issues and pull requests are very
+> welcome — see [Contributing](#contributing). Do not rely on it for production-critical
+> work yet.
 
 **Switch models before you hit your [OpenCode](https://opencode.ai) limit.** Automatic
 model routing and quota failover for the **Go**, **Go Plus**, **Go Teams**, and **Free**
@@ -20,6 +26,22 @@ so your work does not stop. When the use falls again, the router moves them back
 
 For full step-by-step instructions, read the [usage guide](./USAGE.md). Before you use
 the router, read its [known limits](./USAGE.md#11-known-limits).
+
+## Development status
+
+opencode-router is **alpha software**. The Go allowance rules, provider APIs, model
+catalog, and cap tables change often, and this project has known gaps and bugs. The
+configuration format and routing behavior can change between releases.
+
+Please help make it better:
+
+- [Report a bug](https://github.com/s-berdia/Opencode_router/issues/new?template=bug_report.yml)
+  with your OpenCode version, provider/plan, and a short log or status output.
+- [Request a model score](https://github.com/s-berdia/Opencode_router/issues/new?template=model_score.yml)
+  or send a pull request with a source.
+- Ask questions and share ideas in [Discussions](https://github.com/s-berdia/Opencode_router/discussions).
+- Pick up a [`good first issue`](https://github.com/s-berdia/Opencode_router/labels/good%20first%20issue)
+  if you want to contribute code. Read [CONTRIBUTING.md](./CONTRIBUTING.md) first.
 
 ## Features
 
@@ -289,9 +311,12 @@ list. Example for Windows: `"plugins": ["file:///C:/code/Opencode_router"]`. Run
 
 ## Contributing
 
-Bug reports, model scores, and code changes are welcome. Read
-[CONTRIBUTING.md](./CONTRIBUTING.md). For questions and ideas, use
-[Discussions](https://github.com/s-berdia/Opencode_router/discussions).
+This project is early and actively looking for contributors. Bug reports, model scores,
+documentation fixes, and code changes are all welcome. Read
+[CONTRIBUTING.md](./CONTRIBUTING.md) for the setup and the rules. For questions and ideas,
+use [Discussions](https://github.com/s-berdia/Opencode_router/discussions). If you find a
+bug, please include the output of `opencode-router status` and the relevant lines from
+`~/.local/share/opencode/log/opencode.log`.
 
 ## License
 

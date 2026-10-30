@@ -1,5 +1,9 @@
 # opencode-router usage guide
 
+> **Early development.** This project is alpha software and has known issues. Behavior,
+> configuration, and the cap table can change. Please report bugs and contribute fixes:
+> [CONTRIBUTING.md](./CONTRIBUTING.md). Do not use it for production-critical work yet.
+
 This guide gives the full procedure to install, use, change, and remove opencode-router.
 Do the steps in sequence. Each command has a label that tells you which shell to use.
 

@@ -149,4 +149,86 @@ describe("LedgerStore model cooldowns", () => {
     now += 61_000
     expect(store.inCooldown("opencode-go/x")).toBe(false)
   })
+
+  it("does not create an entry for a model that is only checked", () => {
+    const store = new LedgerStore(tmpFile(), () => 10 * DAY)
+    expect(store.inCooldown("opencode-go/x")).toBe(false)
+    expect(store.usage("opencode-go/x")).toMatchObject({ cost5h: 0, tokens5h: 0, cooldownUntil: null })
+    expect(store.snapshot().models).toEqual({})
+  })
+})
+
+describe("LedgerStore step dedupe", () => {
+  it("counts one step id once when several stores share the file", () => {
+    const file = tmpFile()
+    const now = 10 * DAY
+    const first = new LedgerStore(file, () => now)
+    expect(first.record("opencode-go/x", 6, 10, 0.1, "step-1")).toBe(true)
+
+    const second = new LedgerStore(file, () => now)
+    expect(second.record("opencode-go/x", 6, 10, 0.1, "step-1")).toBe(false)
+
+    expect(second.usage("opencode-go/x").costMonth).toBeCloseTo(6, 5)
+    expect(second.allowance().pctMonth).toBeCloseTo(0.1, 5)
+    expect(second.snapshot().seen).toEqual(["step-1"])
+  })
+
+  it("keeps the newest step ids only", () => {
+    const store = new LedgerStore(tmpFile(), () => 10 * DAY)
+    for (let i = 0; i < 1100; i++) store.record("opencode-go/x", 0, 1, 0, `step-${i}`)
+    const seen = store.snapshot().seen ?? []
+    expect(seen).toHaveLength(1000)
+    expect(seen[0]).toBe("step-100")
+    expect(seen.at(-1)).toBe("step-1099")
+  })
+})
+
+describe("LedgerStore version 1 migration", () => {
+  it("drops blended-cost totals but keeps cooldowns", () => {
+    const file = tmpFile()
+    const now = 10 * DAY
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        version: 1,
+        updatedAt: new Date(now).toISOString(),
+        models: {
+          "opencode-go/x": {
+            cost5h: 99,
+            costWeek: 99,
+            costMonth: 99,
+            tokens5h: 1,
+            tokensWeek: 1,
+            tokensMonth: 1,
+            window5hStart: now,
+            windowWeekStart: now,
+            windowMonthStart: now,
+            cooldownUntil: now + HOUR,
+            lastError: "rate limit",
+          },
+          "opencode-go/y": { costMonth: 5 },
+        },
+        allowance: {
+          buckets: [[now, 1]],
+          cooldownUntil: now + HOUR,
+          lastError: "Go usage limit",
+        },
+      }),
+      "utf8",
+    )
+
+    const store = new LedgerStore(file, () => now)
+    expect(store.usage("opencode-go/x")).toMatchObject({ costMonth: 0, cooldownUntil: now + HOUR })
+    expect(store.inCooldown("opencode-go/x")).toBe(true)
+    expect(store.allowance()).toMatchObject({ pctMonth: 0, cooldownUntil: now + HOUR, cooldownReason: "Go usage limit" })
+    expect(store.snapshot().models["opencode-go/y"]?.costMonth).toBe(0)
+
+    // The migrated file is written back as version 2, with the old buckets gone.
+    const saved = JSON.parse(fs.readFileSync(file, "utf8")) as {
+      version: number
+      allowance: { buckets: unknown[] }
+    }
+    expect(saved.version).toBe(2)
+    expect(saved.allowance.buckets).toEqual([])
+  })
 })

@@ -179,9 +179,12 @@ The **Notes** section under the table shows problems, for example a missing cata
 
 ### How the router changes models
 
-- All `go` models share one usage allowance. Each message uses a part of it: the cost of
-  the message divided by the monthly limit of its model (`Cap/mo`). A model with a low
-  limit uses the allowance faster.
+- All `go` models share one usage allowance. Each message uses a part of it: the token
+  cost of the message, priced per token kind (input, output, reasoning as output, cache
+  read, and cache write) with the prices in your OpenCode model catalog, divided by the
+  monthly limit of its model (`Cap/mo`). A model with a low limit uses the allowance
+  faster. This matches the `usage.opencode.allowance` that the Go API reports; a blended
+  per-million-token estimate overstates cache-heavy turns by an order of magnitude.
 - The allowance has 3 windows: 5 hours (20% of the monthly allowance), 7 days (50%), and
   30 days (100%). The router estimates the use in each window from the messages that it
   records.
@@ -571,9 +574,10 @@ These are the limits of version 1.3.0.
    files of one project, use the terminal tool with `--scope project`.
 4. The slash commands need Node.js 20 or later on the `PATH`.
 5. Use numbers are estimates. The router counts only the messages that it records. Use
-   from another computer is not included. After an update from version 1.1 or earlier,
-   the estimate starts at 0%. If two OpenCode windows write at the same moment, one
-   record can be lost.
+   from another computer is not included. A ledger written before version 1.3.1 is reset
+   once: those versions used a blended per-million price, which overstated cache-heavy
+   turns; cooldowns survive the reset. If two OpenCode windows write at the same moment,
+   one record can be lost.
 6. The router treats the 3 windows as rolling windows. If OpenCode resets a window at a
    fixed time, the estimate can differ from the console.
 7. After a usage-limit error, all `go` models go into a 1-hour cooldown. After a

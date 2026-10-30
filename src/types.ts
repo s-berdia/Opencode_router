@@ -266,10 +266,16 @@ export interface LedgerAllowance {
 }
 
 export interface Ledger {
-  version: number
+  version: 2
   updatedAt: string
   models: Record<string, LedgerModelState>
   allowance?: LedgerAllowance
+  /**
+   * Recent `session.step.ended` ids. Several OpenCode hosts can share the
+   * ledger file, and each has its own in-process dedupe; this list stops the
+   * same step from being added once per host.
+   */
+  seen?: string[]
 }
 
 export interface MonthlyCap {

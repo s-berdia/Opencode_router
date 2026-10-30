@@ -3,13 +3,13 @@ import path from "node:path"
 import { Plugin } from "@opencode/plugin"
 import { allowanceShare, buildRoutingTable, healthCheck, pickForRole, usesAllowance, type BuildResult } from "./engine.js"
 import { LedgerStore } from "./ledger.js"
-import { blendedCost } from "./scoring.js"
+import { allowanceCost } from "./allowance.js"
 import { routingConfigBody } from "./apply.js"
 import { cliArgsFor, cliScriptPath, commandArguments, SLASH_COMMANDS } from "./commands.js"
 import { writeJson } from "./paths.js"
 import type { HudSnapshot } from "./state.js"
 import { hudFile, ledgerFile, readLiveModels, routingTableFile, writeApplyMarker, readApplyMarker, writeLiveModels } from "./state.js"
-import { isAgentRole, type RankingEntry } from "./types.js"
+import { isAgentRole, type CatalogModel, type RankingEntry } from "./types.js"
 
 const RATE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000
 const AUTH_COOLDOWN_MS = 24 * 60 * 60 * 1000
@@ -168,8 +168,8 @@ export const RouterPlugin = Plugin.define({
     let cachedAt = 0
     /** Ids from the running server, so a removed model never reaches the table. */
     let liveCache: { ids: Set<string>; at: number } | null = null
-    /** Per-model blended USD cost per 1M tokens, for self-estimating spend. */
-    let blendedById = new Map<string, number>()
+    /** Catalog entries by id, for the token-priced allowance cost of a finished step. */
+    let catalogById = new Map<string, CatalogModel>()
 
     /** Publish state for the TUI widget. Best-effort and cheap: one small JSON file. */
     function writeHud(mode?: string): void {
@@ -232,7 +232,7 @@ export const RouterPlugin = Plugin.define({
       const result = await buildRoutingTable({ projectDir: dir, liveModelIDs: await liveModelIDs(force) })
       cached = result
       cachedAt = now
-      blendedById = new Map(result.catalog.map((m) => [m.id, blendedCost(m, result.cfg)]))
+      catalogById = new Map(result.catalog.map((m) => [m.id, m]))
       try {
         writeJson(routingTableFile(), result.table)
       } catch {
@@ -468,7 +468,8 @@ export const RouterPlugin = Plugin.define({
           signal: abort.signal,
         })) {
           try {
-            await onEvent(event.type, (event as { data?: unknown }).data)
+            const created = Number((event as { created?: unknown }).created)
+            await onEvent(event.type, (event as { data?: unknown }).data, Number.isFinite(created) ? created : undefined)
           } catch {
             /* events are best-effort */
           }
@@ -478,7 +479,7 @@ export const RouterPlugin = Plugin.define({
       }
     })()
 
-    async function onEvent(type: string, raw: unknown): Promise<void> {
+    async function onEvent(type: string, raw: unknown, created?: number): Promise<void> {
       const data = (raw ?? {}) as Record<string, unknown>
       if (type === "session.model.selected") {
         const sessionID = data.sessionID
@@ -518,17 +519,26 @@ export const RouterPlugin = Plugin.define({
         if (!used) return
         const result = await ensure()
         const count = (n?: number) => Number(n ?? 0)
-        const total =
-          count(tokens?.input) + count(tokens?.output) + count(tokens?.reasoning) +
-          count(tokens?.cache?.read) + count(tokens?.cache?.write)
-        // Subscription turns may report $0. Estimate from the catalog so the
-        // rolling ledger stays meaningful and failover still triggers.
-        let cost = Number(data.cost ?? 0)
-        if (cost === 0 && total > 0) {
-          const blended = blendedById.get(used) ?? 0
-          if (blended > 0) cost = (total / 1_000_000) * blended
+        const usage = {
+          input: count(tokens?.input),
+          output: count(tokens?.output),
+          reasoning: count(tokens?.reasoning),
+          cacheRead: count(tokens?.cache?.read),
+          cacheWrite: count(tokens?.cache?.write),
         }
-        ledger.record(used, cost, total, allowanceShare(result, used, cost))
+        const total = usage.input + usage.output + usage.reasoning + usage.cacheRead + usage.cacheWrite
+        // `session.step.ended` reports `cost: 0` for Go subscription turns. Price
+        // the tokens with the model's own prices instead of a blended estimate:
+        // a cache read costs a fraction of fresh input, so the blended number
+        // overstates a long, cache-heavy turn by an order of magnitude.
+        const model = catalogById.get(used)
+        const at = created !== undefined && created > 0 ? created : Date.now()
+        const priced = model ? allowanceCost(model, usage, at) : 0
+        const reported = Number(data.cost ?? 0)
+        const onAllowance = usesAllowance(result, used)
+        const cost = onAllowance ? (priced > 0 ? priced : reported) : reported > 0 ? reported : priced
+        const share = onAllowance ? allowanceShare(result, used, cost) : 0
+        ledger.recordStep({ stepID, modelId: used, costUSD: cost, tokens: total, allowanceShare: share, at })
         writeHud(mode())
         return
       }

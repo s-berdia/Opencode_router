@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest"
 import { globalOpencodeDir, makeProject, readJsonFile, setupRouter, writeCatalog, type StubRouter } from "./helpers.js"
 
 interface LedgerFile {
-  models: Record<string, { cooldownUntil?: number }>
+  models: Record<string, { cooldownUntil?: number; costMonth?: number; tokensMonth?: number }>
   allowance?: { buckets: Array<[number, number]>; cooldownUntil?: number }
 }
 
@@ -128,25 +128,36 @@ describe("plugin failover", () => {
     expect(cooled).toEqual([used])
   })
 
-  it("adds the allowance share of a subscription model to the ledger", async () => {
+  it("prices a subscription step from its tokens, not the reported cost", async () => {
     writeCatalog()
     const router = await setupRouter(makeProject())
     await prompt(router, "s1")
     const used = router.switched[0]!.model
+    expect(used).toBe("opencode-go/deepseek-v4.1-flash")
 
-    // glm-5.3-flash has a monthly limit of $60 on Go, so $6 is 10% of the allowance.
-    router.emit("session.step.ended", {
-      sessionID: "s1",
-      assistantMessageID: "m1",
-      finish: "stop",
-      cost: 6,
-      tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 0, write: 0 } },
-    })
+    // The fixture prices deepseek-v4.1-flash at $0.20 in / $0.80 out per 1M,
+    // with a $80 monthly Go limit. The reported `cost` is ignored: the Go API
+    // reports 0 for subscription turns and a stale blended estimate is wrong.
+    // Midnight UTC is off-peak for DeepSeek at every weekday.
+    const midnight = new Date()
+    midnight.setUTCHours(0, 0, 0, 0)
+    router.emit(
+      "session.step.ended",
+      {
+        sessionID: "s1",
+        assistantMessageID: "m1",
+        finish: "stop",
+        cost: 6,
+        tokens: { input: 1000, output: 100, reasoning: 0, cache: { read: 0, write: 0 } },
+      },
+      midnight.getTime(),
+    )
     await drain()
 
     const ledger = readJsonFile<LedgerFile>(ledgerFile())
-    expect(ledger.models[used]).toBeTruthy()
-    expect(ledger.allowance?.buckets[0]?.[1]).toBeGreaterThan(0)
+    expect(ledger.models[used]?.costMonth).toBeCloseTo(0.00028, 8)
+    expect(ledger.models[used]?.tokensMonth).toBe(1100)
+    expect(ledger.allowance?.buckets[0]?.[1]).toBeCloseTo(0.00028 / 80, 8)
   })
 
   it("moves the session to its free model after a usage-limit error", async () => {

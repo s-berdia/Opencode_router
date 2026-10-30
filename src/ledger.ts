@@ -5,6 +5,8 @@ import { FIVE_HOUR_SHARE, WEEK_SHARE } from "./scoring.js"
 
 const HOUR = 3_600_000
 const DAY = 24 * HOUR
+/** Step ids kept for cross-host dedupe; enough to cover any in-flight step. */
+const MAX_SEEN_STEPS = 1000
 export const WINDOW_5H = 5 * HOUR
 export const WINDOW_WEEK = 7 * DAY
 export const WINDOW_MONTH = 30 * DAY
@@ -25,11 +27,42 @@ function emptyState(now: number): LedgerModelState {
 }
 
 function emptyLedger(now: number): Ledger {
-  return { version: 1, updatedAt: new Date(now).toISOString(), models: {} }
+  return { version: 2, updatedAt: new Date(now).toISOString(), models: {}, seen: [] }
 }
 
 function isLedger(value: unknown): value is Ledger {
+  return isPlainObject(value) && value.version === 2 && isPlainObject(value.models)
+}
+
+function isLegacyLedger(value: unknown): value is Record<string, unknown> {
   return isPlainObject(value) && value.version === 1 && isPlainObject(value.models)
+}
+
+/**
+ * Version 1 estimated each step with a blended per-million price on the total
+ * token count. That overcharged cache-heavy turns by up to two orders of
+ * magnitude, so those numbers cannot be kept. Cooldowns are real and survive.
+ */
+function migrateLegacy(value: Record<string, unknown>, now: number): Ledger {
+  const models: Record<string, LedgerModelState> = {}
+  const legacyModels = isPlainObject(value.models) ? value.models : {}
+  for (const [id, raw] of Object.entries(legacyModels)) {
+    if (!isPlainObject(raw)) continue
+    const state = emptyState(now)
+    if (typeof raw.cooldownUntil === "number" && raw.cooldownUntil > now) state.cooldownUntil = raw.cooldownUntil
+    if (typeof raw.lastError === "string") state.lastError = raw.lastError
+    models[id] = state
+  }
+
+  const allowance: LedgerAllowance = { buckets: [] }
+  if (isPlainObject(value.allowance)) {
+    if (typeof value.allowance.cooldownUntil === "number" && value.allowance.cooldownUntil > now) {
+      allowance.cooldownUntil = value.allowance.cooldownUntil
+    }
+    if (typeof value.allowance.lastError === "string") allowance.lastError = value.allowance.lastError
+  }
+
+  return { version: 2, updatedAt: new Date(now).toISOString(), models, allowance, seen: [] }
 }
 
 function mtimeOf(file: string): number {
@@ -38,6 +71,20 @@ function mtimeOf(file: string): number {
   } catch {
     return -1
   }
+}
+
+/** One completed assistant step, as `session.step.ended` reports it. */
+export interface StepRecord {
+  /** `assistantMessageID`; when set, a step is counted once across hosts. */
+  stepID?: string
+  modelId: string
+  /** USD the step cost, for the per-model spend stats. */
+  costUSD: number
+  tokens: number
+  /** Part of the shared Go allowance the step used; 0 outside the allowance. */
+  allowanceShare?: number
+  /** When the step ran; defaults to now. Sets the allowance bucket. */
+  at?: number
 }
 
 export interface ModelUsage {
@@ -77,7 +124,19 @@ export class LedgerStore {
   private load(): Ledger {
     this.loadedMtime = mtimeOf(this.file)
     const result = readJsonFile(this.file)
-    if (result.status === "ok" && isLedger(result.value)) return result.value
+    if (result.status === "ok") {
+      if (isLedger(result.value)) return result.value
+      if (isLegacyLedger(result.value)) {
+        const migrated = migrateLegacy(result.value, this.now())
+        try {
+          writeJson(this.file, migrated)
+          this.loadedMtime = mtimeOf(this.file)
+        } catch {
+          /* keep the migrated copy in memory; the next save writes version 2 */
+        }
+        return migrated
+      }
+    }
     if (result.status !== "absent") {
       try {
         fs.renameSync(this.file, `${this.file}.corrupt-${this.now()}`)
@@ -113,9 +172,15 @@ export class LedgerStore {
     return state
   }
 
-  private state(modelId: string): LedgerModelState {
+  /** The stored state, without creating an entry for a model that has never run. */
+  private existing(modelId: string): LedgerModelState | undefined {
     this.sync()
-    const now = this.now()
+    const entry = this.data.models[modelId]
+    return entry ? this.roll(entry, this.now()) : undefined
+  }
+
+  private stateFor(modelId: string, now = this.now()): LedgerModelState {
+    this.sync()
     let entry = this.data.models[modelId]
     if (!entry) {
       entry = emptyState(now)
@@ -124,51 +189,83 @@ export class LedgerStore {
     return this.roll(entry, now)
   }
 
-  /** `allowanceShare`: the cost divided by the model's monthly limit; 0 for a model outside the Go allowance. */
-  record(modelId: string, costUSD: number, tokens: number, allowanceShare = 0): void {
-    const state = this.state(modelId)
-    state.cost5h += costUSD
-    state.costWeek += costUSD
-    state.costMonth += costUSD
+  /**
+   * Record one completed step. Returns false when the step id was already
+   * counted, either by this process or by another OpenCode host that shares
+   * the ledger file.
+   */
+  recordStep(step: StepRecord): boolean {
+    this.sync()
+    if (step.stepID && this.hasStep(step.stepID)) return false
+
+    const now = step.at ?? this.now()
+    const state = this.stateFor(step.modelId)
+    const cost = Number.isFinite(step.costUSD) ? step.costUSD : 0
+    const tokens = Number.isFinite(step.tokens) ? Math.max(0, step.tokens) : 0
+    state.cost5h += cost
+    state.costWeek += cost
+    state.costMonth += cost
     state.tokens5h += tokens
     state.tokensWeek += tokens
     state.tokensMonth += tokens
     state.lastUsedAt = this.now()
-    if (allowanceShare > 0) this.addShare(allowanceShare)
+
+    const share = Number.isFinite(step.allowanceShare) ? (step.allowanceShare ?? 0) : 0
+    if (share > 0) this.addShare(share, now)
+    if (step.stepID) this.rememberStep(step.stepID)
     this.save()
+    return true
   }
 
-  /** Call after sync() or state(), never before: a reload would drop changes to the old data. */
+  /** `allowanceShare`: the cost divided by the model's monthly limit; 0 for a model outside the Go allowance. */
+  record(modelId: string, costUSD: number, tokens: number, allowanceShare = 0, stepID?: string, at?: number): boolean {
+    return this.recordStep({ modelId, costUSD, tokens, allowanceShare, stepID, at })
+  }
+
+  private hasStep(id: string): boolean {
+    return Array.isArray(this.data.seen) && this.data.seen.includes(id)
+  }
+
+  private rememberStep(id: string): void {
+    if (!Array.isArray(this.data.seen)) this.data.seen = []
+    const seen = this.data.seen
+    const index = seen.indexOf(id)
+    if (index !== -1) seen.splice(index, 1)
+    seen.push(id)
+    if (seen.length > MAX_SEEN_STEPS) seen.splice(0, seen.length - MAX_SEEN_STEPS)
+  }
+
+  /** Call after a sync-triggering read, never before: a reload would drop changes to the old data. */
   private sharedAllowance(): LedgerAllowance {
     if (!this.data.allowance || !Array.isArray(this.data.allowance.buckets)) this.data.allowance = { buckets: [] }
     return this.data.allowance
   }
 
-  private addShare(share: number): void {
+  private addShare(share: number, now: number): void {
     const allowance = this.sharedAllowance()
-    const now = this.now()
     const hour = Math.floor(now / HOUR) * HOUR
-    allowance.buckets = allowance.buckets.filter(([start]) => start + HOUR > now - WINDOW_MONTH)
+    const current = this.now()
+    allowance.buckets = allowance.buckets.filter(([start]) => start + HOUR > current - WINDOW_MONTH)
     const bucket = allowance.buckets.find(([start]) => start === hour)
     if (bucket) bucket[1] += share
     else allowance.buckets.push([hour, share])
   }
 
   cooldown(modelId: string, durationMs: number, reason?: string): void {
-    const state = this.state(modelId)
+    const state = this.stateFor(modelId)
     state.cooldownUntil = this.now() + durationMs
     if (reason) state.lastError = reason
     this.save()
   }
 
   clearCooldown(modelId: string): void {
-    const state = this.state(modelId)
+    const state = this.stateFor(modelId)
     state.cooldownUntil = undefined
     this.save()
   }
 
   inCooldown(modelId: string): boolean {
-    const until = this.state(modelId).cooldownUntil
+    const until = this.existing(modelId)?.cooldownUntil
     return until !== undefined && this.now() < until
   }
 
@@ -182,13 +279,13 @@ export class LedgerStore {
   }
 
   usage(modelId: string): ModelUsage {
-    const state = this.state(modelId)
+    const state = this.existing(modelId)
     return {
-      cost5h: state.cost5h,
-      costMonth: state.costMonth,
-      tokens5h: state.tokens5h,
-      tokensMonth: state.tokensMonth,
-      cooldownUntil: state.cooldownUntil ?? null,
+      cost5h: state?.cost5h ?? 0,
+      costMonth: state?.costMonth ?? 0,
+      tokens5h: state?.tokens5h ?? 0,
+      tokensMonth: state?.tokensMonth ?? 0,
+      cooldownUntil: state?.cooldownUntil ?? null,
     }
   }
 

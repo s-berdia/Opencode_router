@@ -184,9 +184,9 @@ export interface StubRouter {
   synthetic: Array<{ sessionID: string; text: string }>
   /** Session info the stub `ctx.session.get` returns from. */
   sessions: Map<string, { agent?: string; model?: unknown }>
-  queued: Array<{ type: string; data?: unknown }>
+  queued: Array<{ type: string; data?: unknown; created?: number }>
   /** Deliver one event to the plugin's subscriber. */
-  emit: (type: string, data?: unknown) => void
+  emit: (type: string, data?: unknown, created?: number) => void
   /** Replay the agent transforms (what `ctx.agent.reload()` does in OpenCode). */
   agentReload: () => Promise<void>
   dispose: () => Promise<void> | void
@@ -225,8 +225,8 @@ export async function setupRouter(dir: string, agents = defaultAgents()): Promis
     synthetic: [],
     sessions: new Map(),
     queued: [],
-    emit: (type, data) => {
-      router.queued.push({ type, data })
+    emit: (type, data, created) => {
+      router.queued.push({ type, data, created })
     },
     agentReload: async () => {
       for (const callback of agentEdits) {

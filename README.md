@@ -174,7 +174,7 @@ or a value that is not valid, the router ignores it and shows a note in the scor
 | `weights.<role>` | see `model-scores.json` | Weights for `intelligence`, `speed`, `endurance`, and `reliability`. Use values that add up to 1 |
 | `scores.<model-id>` | see `model-scores.json` | Your own `intelligence` and `speed` values (0 to 100). These are pins: they always win over the generated snapshot |
 | `roles.<role>` | see `model-scores.json` | Change `variant`, `chainDepth`, `requires`, `preferFree`, or `diversifyFamily` for one role |
-| `blend` | `{ "input": 0.75, "output": 0.25, "cacheRead": 0.1 }` | Token mix used to calculate the cost of one million tokens |
+| `blend` | `{ "input": 0.75, "output": 0.25, "cacheRead": 0.1 }` | Token mix used for the endurance estimate; the allowance ledger prices each token kind from the catalog instead |
 | `enduranceScale` | `{ "minTokensPer5h": 0.25, "maxTokensPer5h": 40 }` | Millions of tokens per 5 hours that give an endurance score of 0 and 100 |
 | `feeds` | `{ "enabled": false }` | Optional benchmark feed: `{ "enabled": true, "url": "https://...", "timeoutMs": 5000 }` |
 | `updateCheck` | `true` | Once each 24 hours, ask npm for the newest router version. `false` stops the check |

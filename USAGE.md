@@ -528,6 +528,7 @@ The router writes these files:
 | `~/.config/opencode/router/last-apply.json` | Plugin | What the last apply did: what reloaded, or "applies on the next message" |
 | `~/.config/opencode/router/eval-report.md` | `/routing-eval` | The test report |
 | `~/.config/opencode/router/update-check.json` | Plugin, `status`, `refresh` | The time of the last update check and the newest version on npm |
+| `~/.config/opencode/router/live-models.json` | Plugin | The model ids the running OpenCode server last reported, so CLI commands do not route to a removed model |
 | `~/.config/opencode/opencode.json` | `/refresh-routing`, `/routing-plan` | `model`, `small_model`, and `agent.<role>.model` and `variant` |
 | `~/.config/opencode/router.config.json` | `/routing-plan`, `install` (only if missing) | Your router settings |
 

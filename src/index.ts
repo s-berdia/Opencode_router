@@ -8,11 +8,15 @@ import { routingConfigBody } from "./apply.js"
 import { cliArgsFor, cliScriptPath, commandArguments, SLASH_COMMANDS } from "./commands.js"
 import { writeJson } from "./paths.js"
 import type { HudSnapshot } from "./state.js"
-import { hudFile, ledgerFile, routingTableFile, writeApplyMarker, readApplyMarker } from "./state.js"
+import { hudFile, ledgerFile, readLiveModels, routingTableFile, writeApplyMarker, readApplyMarker, writeLiveModels } from "./state.js"
 import { isAgentRole, type RankingEntry } from "./types.js"
 
 const RATE_LIMIT_COOLDOWN_MS = 60 * 60 * 1000
 const AUTH_COOLDOWN_MS = 24 * 60 * 60 * 1000
+/** A model that OpenCode no longer lists is gone until the account changes. */
+const MODEL_GONE_COOLDOWN_MS = 24 * 60 * 60 * 1000
+/** The live model list changes rarely; a minute keeps prompts cheap. */
+const LIVE_TTL_MS = 60_000
 const MAX_TRACKED_STEPS = 500
 // Short TTL: after /refresh-routing (or any change to the catalog or config),
 // the running session recomputes the table on its next message without a
@@ -59,6 +63,13 @@ function isAuthError(error: unknown): boolean {
   const data = error as StructuredError
   if (data.status === 401 || data.status === 403) return true
   return /auth|unauthor|credential|api.?key/i.test(String(data.type ?? ""))
+}
+
+/** The provider or model id is gone, not merely rate limited. */
+function isModelUnavailableError(error: unknown): boolean {
+  const { status, message } = errorData(error)
+  if (status === 404) return true
+  return /model.*(?:not found|not available|does not exist|unknown)|no such model|invalid model/.test(message)
 }
 
 /** Parse `providerID/modelID` into a v2 Model.Ref. */
@@ -155,6 +166,8 @@ export const RouterPlugin = Plugin.define({
 
     let cached: BuildResult | null = null
     let cachedAt = 0
+    /** Ids from the running server, so a removed model never reaches the table. */
+    let liveCache: { ids: Set<string>; at: number } | null = null
     /** Per-model blended USD cost per 1M tokens, for self-estimating spend. */
     let blendedById = new Map<string, number>()
 
@@ -186,10 +199,37 @@ export const RouterPlugin = Plugin.define({
       }
     }
 
+    /**
+     * The ids the running OpenCode server reports. `ctx.model.list` is the
+     * authoritative v2 inventory; the `models.json` cache can keep models that
+     * the account no longer has. A failed or empty list falls back to the last
+     * snapshot, then to the cache (undefined).
+     */
+    async function liveModelIDs(force = false): Promise<ReadonlySet<string> | undefined> {
+      const now = Date.now()
+      if (!force && liveCache && now - liveCache.at < LIVE_TTL_MS) return liveCache.ids
+      try {
+        const list = await ctx.model.list({ location: { directory: dir } })
+        const ids = new Set(
+          list.data.filter((model) => model.enabled !== false).map((model) => `${model.providerID}/${model.modelID}`),
+        )
+        if (ids.size === 0) return liveCache?.ids ?? readLiveModels()
+        liveCache = { ids, at: now }
+        try {
+          writeLiveModels(ids)
+        } catch {
+          /* the snapshot only helps CLI commands; routing does not depend on it */
+        }
+        return ids
+      } catch {
+        return liveCache?.ids ?? readLiveModels()
+      }
+    }
+
     async function ensure(force = false): Promise<BuildResult> {
       const now = Date.now()
       if (!force && cached && now - cachedAt < TTL_MS) return cached
-      const result = await buildRoutingTable({ projectDir: dir })
+      const result = await buildRoutingTable({ projectDir: dir, liveModelIDs: await liveModelIDs(force) })
       cached = result
       cachedAt = now
       blendedById = new Map(result.catalog.map((m) => [m.id, blendedCost(m, result.cfg)]))
@@ -424,7 +464,7 @@ export const RouterPlugin = Plugin.define({
     const pump = (async () => {
       try {
         for await (const event of ctx.event.subscribe({
-          types: ["session.model.selected", "session.step.ended", "session.execution.failed"],
+          types: ["session.model.selected", "session.step.ended", "session.execution.failed", "model.updated"],
           signal: abort.signal,
         })) {
           try {
@@ -493,6 +533,13 @@ export const RouterPlugin = Plugin.define({
         return
       }
 
+      if (type === "model.updated") {
+        // The provider list changed; rebuild on the next prompt with fresh ids.
+        liveCache = null
+        cachedAt = 0
+        return
+      }
+
       if (type === "session.execution.failed") {
         const sessionID = data.sessionID
         if (typeof sessionID !== "string") return
@@ -500,7 +547,11 @@ export const RouterPlugin = Plugin.define({
         if (!used) return
         const error = data.error ?? {}
         if (isAuthError(error)) ledger.cooldown(used, AUTH_COOLDOWN_MS, "auth error")
-        else await coolDown(used, error, "rate limit / quota")
+        else if (isModelUnavailableError(error)) {
+          ledger.cooldown(used, MODEL_GONE_COOLDOWN_MS, "model unavailable")
+          liveCache = null
+          cachedAt = 0
+        } else await coolDown(used, error, "rate limit / quota")
         writeHud(mode())
       }
     }

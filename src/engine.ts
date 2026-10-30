@@ -8,6 +8,7 @@ import { rankRole } from "./rank.js"
 import { monthlyCapFor, type FeedScores } from "./scoring.js"
 import { healthForCatalog, loadStatusHealth, type HealthMap } from "./status.js"
 import { catalogCacheFile } from "./paths.js"
+import { readLiveModels } from "./state.js"
 import type { LedgerStore } from "./ledger.js"
 
 export interface BuildOptions {
@@ -19,6 +20,12 @@ export interface BuildOptions {
   feeds?: FeedScores
   /** Live model health; fetched from the status page when omitted. */
   health?: HealthMap
+  /**
+   * The ids OpenCode currently lists. Models absent from this set are dropped
+   * before ranking. The CLI reads the plugin's snapshot when the caller does
+   * not pass a set; an empty set means "no live data", not "no models".
+   */
+  liveModelIDs?: ReadonlySet<string>
   notes?: string[]
 }
 
@@ -33,11 +40,34 @@ export interface BuildResult {
 
 export async function buildRoutingTable(opts: BuildOptions = {}): Promise<BuildResult> {
   const catalogFile = opts.catalogFile ?? catalogCacheFile()
-  const raw = opts.catalog ?? loadCatalog(catalogFile)
+  const rawCatalog = opts.catalog ?? loadCatalog(catalogFile)
+  const liveIDs = opts.liveModelIDs ?? readLiveModels()
+  const filtered = liveIDs && liveIDs.size > 0 ? rawCatalog.filter((model) => liveIDs.has(model.id)) : rawCatalog
+  // A live list that shares nothing with the cache usually means the two came
+  // from different OpenCode installs or account tiers. Keep routing on the
+  // cache rather than produce an empty table, but say so.
+  const liveMatched = !liveIDs || liveIDs.size === 0 || filtered.length > 0
+  const raw = liveMatched ? filtered : rawCatalog
   const clean = dedupeCatalog(raw)
   const catalog = clean.catalog
   const user = loadUserConfig(opts.projectDir)
   const notes: string[] = [...(opts.notes ?? []), ...user.notes, ...clean.notes]
+
+  if (liveIDs && liveIDs.size > 0 && liveMatched) {
+    const dropped = rawCatalog.length - filtered.length
+    if (dropped > 0) {
+      const sample = rawCatalog
+        .filter((model) => !liveIDs.has(model.id))
+        .slice(0, 5)
+        .map((model) => model.id)
+        .join(", ")
+      notes.push(
+        `Dropped ${dropped} model${dropped === 1 ? "" : "s"} that OpenCode no longer lists: ${sample}${dropped > 5 ? ", ..." : ""}`,
+      )
+    }
+  } else if (liveIDs && liveIDs.size > 0) {
+    notes.push("The live model list did not match the cached catalog; using the cached catalog.")
+  }
 
   if (catalog.length === 0) {
     notes.push(`No models found in ${catalogFile}. Start OpenCode one time and sign in, then run this command again.`)

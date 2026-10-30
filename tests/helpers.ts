@@ -2,6 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import { vi } from "vitest"
 import RouterPlugin from "../src/index.js"
+import { loadCatalog } from "../src/catalog.js"
 import type { HealthMap } from "../src/status.js"
 import type { CatalogModel } from "../src/types.js"
 
@@ -281,6 +282,20 @@ export async function setupRouter(dir: string, agents = defaultAgents()): Promis
       list: async () => [...agents.values()],
     },
     model: {
+      list: async () => {
+        const models = loadCatalog(path.join(process.env.XDG_CACHE_HOME!, "opencode", "models.json"))
+        return {
+          location: { directory: dir },
+          data: models.map((entry) => ({
+            id: entry.modelID,
+            modelID: entry.modelID,
+            providerID: entry.providerID,
+            name: entry.name,
+            enabled: true,
+            status: "active",
+          })),
+        }
+      },
       transform: async (callback: (editor: unknown) => void) => {
         modelEdits.push(callback)
         callback({

@@ -30,6 +30,40 @@ export function hudFile(): string {
   return path.join(stateDir(), "hud.json")
 }
 
+/** The live model ids the running OpenCode server reports, written by the plugin for the CLI. */
+export function liveModelsFile(): string {
+  return path.join(stateDir(), "live-models.json")
+}
+
+interface LiveModelsSnapshot {
+  version: 1
+  updatedAt: string
+  models: string[]
+}
+
+/**
+ * Save the provider/model ids that OpenCode actually lists. The CLI reads this
+ * snapshot so it does not route to a model that was removed from the account
+ * since the last `models.json` cache refresh.
+ */
+export function writeLiveModels(ids: Iterable<string>): void {
+  const models = [...new Set(ids)].sort()
+  writeJson(liveModelsFile(), { version: 1, updatedAt: new Date().toISOString(), models } satisfies LiveModelsSnapshot)
+}
+
+/**
+ * The last live model snapshot, or undefined when it is missing, malformed, or
+ * older than `maxAgeMs`. A stale snapshot is worse than the catalog cache.
+ */
+export function readLiveModels(maxAgeMs = 10 * 60_000): Set<string> | undefined {
+  const snapshot = readJson<LiveModelsSnapshot>(liveModelsFile())
+  if (snapshot?.version !== 1 || !Array.isArray(snapshot.models)) return undefined
+  const at = Date.parse(snapshot.updatedAt)
+  if (!Number.isFinite(at) || Date.now() - at > maxAgeMs) return undefined
+  const models = snapshot.models.filter((id): id is string => typeof id === "string" && id.includes("/"))
+  return models.length > 0 ? new Set(models) : undefined
+}
+
 export interface HudSnapshot {
   version: 1
   updatedAt: string

@@ -136,7 +136,7 @@ describe("plugin failover", () => {
     expect(used).toBe("opencode-go/deepseek-v4.1-flash")
 
     // The fixture prices deepseek-v4.1-flash at $0.20 in / $0.80 out per 1M,
-    // with a $80 monthly Go limit. The reported `cost` is ignored: the Go API
+    // with a $100 monthly Go limit. The reported `cost` is ignored: the Go API
     // reports 0 for subscription turns and a stale blended estimate is wrong.
     // Midnight UTC is off-peak for DeepSeek at every weekday.
     const midnight = new Date()
@@ -157,7 +157,7 @@ describe("plugin failover", () => {
     const ledger = readJsonFile<LedgerFile>(ledgerFile())
     expect(ledger.models[used]?.costMonth).toBeCloseTo(0.00028, 8)
     expect(ledger.models[used]?.tokensMonth).toBe(1100)
-    expect(ledger.allowance?.buckets[0]?.[1]).toBeCloseTo(0.00028 / 80, 8)
+    expect(ledger.allowance?.buckets[0]?.[1]).toBeCloseTo(0.00028 / 100, 8)
   })
 
   it("moves the session to its free model after a usage-limit error", async () => {

@@ -1,4 +1,5 @@
 import type { PlanProfile, RankingEntry } from "./types.js"
+import type { GoCaps } from "./go-caps.js"
 import { buildRoutingTable } from "./engine.js"
 import { authFile, writeTextAtomic } from "./paths.js"
 import { storedKeys } from "./auth.js"
@@ -11,6 +12,8 @@ export interface EvalOptions {
   catalog?: string
   json?: boolean
   projectDir?: string
+  goCaps?: GoCaps
+  notes?: string[]
 }
 
 const ROLE = "build"
@@ -180,7 +183,13 @@ function estimateCost(entry: RankingEntry, inputTokens: number, outputTokens: nu
 }
 
 export async function runEval(opts: EvalOptions = {}): Promise<number> {
-  const { table } = await buildRoutingTable({ plan: opts.plan, catalogFile: opts.catalog, projectDir: opts.projectDir })
+  const { table } = await buildRoutingTable({
+    plan: opts.plan,
+    catalogFile: opts.catalog,
+    projectDir: opts.projectDir,
+    goCaps: opts.goCaps,
+    notes: opts.notes,
+  })
   const chain = (table.active[ROLE] ?? []).slice(0, CHAIN_LIMIT)
 
   if (chain.length === 0) {

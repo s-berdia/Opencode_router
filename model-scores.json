@@ -670,121 +670,170 @@
     }
   },
   "monthlyCaps": {
-    "opencode-go/longcat-2.5-preview-free": {
-      "go": null,
-      "goPlus": null
-    },
     "opencode-go/beam-free": {
       "go": null,
-      "goPlus": null
-    },
-    "opencode-go/deepseek-v4.1-flash": {
-      "go": 80,
-      "goPlus": 160
-    },
-    "opencode-go/longcat-2.0": {
-      "go": 60,
-      "goPlus": 240
-    },
-    "opencode-go/hy3": {
-      "go": 60,
-      "goPlus": 240
-    },
-    "opencode-go/step-5-preview": {
-      "go": 60,
-      "goPlus": 240
-    },
-    "opencode-go/gemini-4-argon-contributor": {
-      "go": 60,
-      "goPlus": 240
-    },
-    "opencode-go/glm-5.3-flash": {
-      "go": 60,
-      "goPlus": 180
-    },
-    "opencode-go/glm-5.2": {
-      "go": 60,
-      "goPlus": 180
-    },
-    "opencode-go/kimi-k2.7-code": {
-      "go": 60,
-      "goPlus": 180
-    },
-    "opencode-go/minimax-m3": {
-      "go": 60,
-      "goPlus": 180
-    },
-    "opencode-go/qwen3.7-plus": {
-      "go": 60,
-      "goPlus": 180
-    },
-    "opencode-go/mimo-v2.6-flash": {
-      "go": 60,
-      "goPlus": 120
-    },
-    "opencode-go/mimo-v2.5": {
-      "go": 60,
-      "goPlus": 120
-    },
-    "opencode-go/muse-spark-1.3-contributor": {
-      "go": 60,
-      "goPlus": 120
-    },
-    "opencode-go/muse-spark-1.2-contributor": {
-      "go": 60,
-      "goPlus": 120
-    },
-    "opencode-go/hy4-preview": {
-      "go": 30,
-      "goPlus": 120
-    },
-    "opencode-go/space-bunny": {
-      "go": 30,
-      "goPlus": 120
-    },
-    "opencode-go/qwen3.8-flash": {
-      "go": 30,
-      "goPlus": 90
-    },
-    "opencode-go/glm-5.3": {
-      "go": 15,
-      "goPlus": 120
-    },
-    "opencode-go/kimi-k3": {
-      "go": 15,
-      "goPlus": 60
-    },
-    "opencode-go/mimo-v2.6-pro": {
-      "go": 15,
-      "goPlus": 60
-    },
-    "opencode-go/mimo-v2.5-pro": {
-      "go": 15,
-      "goPlus": 60
-    },
-    "opencode-go/qwen3.8-max": {
-      "go": 15,
-      "goPlus": 60
-    },
-    "opencode-go/deepseek-v4-pro": {
-      "go": 15,
-      "goPlus": 60
-    },
-    "opencode-go/grok-4.7": {
-      "go": 15,
-      "goPlus": 60
-    },
-    "opencode-go/gpt-6-luna": {
-      "go": 15,
-      "goPlus": 60
-    },
-    "opencode-go/gpt-5.6-luna": {
-      "go": 15,
-      "goPlus": 60
+      "goPlus": null,
+      "goTeams": null
     },
     "opencode-go/claude-haiku-5-5": {
       "go": 15,
-      "goPlus": 60
+      "goPlus": 60,
+      "goTeams": 20
+    },
+    "opencode-go/deepseek-v4-pro": {
+      "go": 15,
+      "goPlus": 60,
+      "goTeams": 20
+    },
+    "opencode-go/deepseek-v4.1-flash": {
+      "go": 100,
+      "goPlus": 200,
+      "goTeams": 105
+    },
+    "opencode-go/gemini-4-argon": {
+      "go": 30,
+      "goPlus": 120,
+      "goTeams": 35
+    },
+    "opencode-go/gemini-4-argon-contributor": {
+      "go": 60,
+      "goPlus": 240,
+      "goTeams": 65
+    },
+    "opencode-go/glm-5.2": {
+      "go": 60,
+      "goPlus": 180,
+      "goTeams": 65
+    },
+    "opencode-go/glm-5.3": {
+      "go": 15,
+      "goPlus": 120,
+      "goTeams": 20
+    },
+    "opencode-go/glm-5.3-flash": {
+      "go": 60,
+      "goPlus": 180,
+      "goTeams": 65
+    },
+    "opencode-go/gpt-5.6-luna": {
+      "go": 15,
+      "goPlus": 60,
+      "goTeams": 20
+    },
+    "opencode-go/gpt-6-luna": {
+      "go": 15,
+      "goPlus": 60,
+      "goTeams": 20
+    },
+    "opencode-go/grok-4.7": {
+      "go": 15,
+      "goPlus": 60,
+      "goTeams": 20
+    },
+    "opencode-go/hy3": {
+      "go": 60,
+      "goPlus": 240,
+      "goTeams": 65
+    },
+    "opencode-go/hy4-preview": {
+      "go": 30,
+      "goPlus": 120,
+      "goTeams": 35
+    },
+    "opencode-go/iceman-contributor-free": {
+      "go": null,
+      "goPlus": null,
+      "goTeams": null
+    },
+    "opencode-go/kimi-k2.7-code": {
+      "go": 60,
+      "goPlus": 180,
+      "goTeams": 65
+    },
+    "opencode-go/kimi-k3": {
+      "go": 15,
+      "goPlus": 60,
+      "goTeams": 20
+    },
+    "opencode-go/kimi-k3.1-pro": {
+      "go": 15,
+      "goPlus": 60,
+      "goTeams": 20
+    },
+    "opencode-go/longcat-2.0": {
+      "go": 60,
+      "goPlus": 240,
+      "goTeams": 65
+    },
+    "opencode-go/longcat-2.5-preview-free": {
+      "go": null,
+      "goPlus": null,
+      "goTeams": null
+    },
+    "opencode-go/mimo-v2.5": {
+      "go": 60,
+      "goPlus": 120,
+      "goTeams": 65
+    },
+    "opencode-go/mimo-v2.5-pro": {
+      "go": 15,
+      "goPlus": 60,
+      "goTeams": 20
+    },
+    "opencode-go/mimo-v2.6-flash": {
+      "go": 60,
+      "goPlus": 120,
+      "goTeams": 65
+    },
+    "opencode-go/mimo-v2.6-pro": {
+      "go": 15,
+      "goPlus": 60,
+      "goTeams": 20
+    },
+    "opencode-go/minimax-m3": {
+      "go": 60,
+      "goPlus": 180,
+      "goTeams": 65
+    },
+    "opencode-go/minimax-m3.1-flash": {
+      "go": 20,
+      "goPlus": 80,
+      "goTeams": 25
+    },
+    "opencode-go/muse-spark-1.2-contributor": {
+      "go": 60,
+      "goPlus": 120,
+      "goTeams": 65
+    },
+    "opencode-go/muse-spark-1.3-contributor": {
+      "go": 60,
+      "goPlus": 120,
+      "goTeams": 65
+    },
+    "opencode-go/qwen3.7-plus": {
+      "go": 60,
+      "goPlus": 180,
+      "goTeams": 65
+    },
+    "opencode-go/qwen3.8-flash": {
+      "go": 30,
+      "goPlus": 90,
+      "goTeams": 35
+    },
+    "opencode-go/qwen3.8-max": {
+      "go": 15,
+      "goPlus": 60,
+      "goTeams": 20
+    },
+    "opencode-go/space-bunny": {
+      "go": 30,
+      "goPlus": 120,
+      "goTeams": 35
+    },
+    "opencode-go/step-5-preview": {
+      "go": 15,
+      "goPlus": 60,
+      "goTeams": 20
     }
   },
   "_meta": {

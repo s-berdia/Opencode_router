@@ -20,34 +20,31 @@ import {
 
 const HOUR = 3_600_000
 
-test("windowShare sums only the buckets in the window", () => {
+test("windowShare sums only the steps in the window", () => {
   const now = 1000 * HOUR
   const buckets: Array<[number, number]> = [
-    [now - HOUR, 0.1], // ends at now: whole share counts
-    [now - 10 * HOUR, 0.99], // ends before the 5h window starts
-    [now - 0.5 * HOUR, 0.05], // ends at now: whole share counts
+    [now - HOUR, 0.1],
+    [now - 10 * HOUR, 0.99],
+    [now - 0.5 * HOUR, 0.05],
   ]
-  expect(windowShare(buckets, now, 5 * HOUR)).toBeCloseTo(0.15)
-  expect(windowShare(buckets, now, 30 * 24 * HOUR)).toBeCloseTo(0.1 + 0.99 + 0.05)
+  expect(windowShare(buckets, now - 5 * HOUR, now)).toBeCloseTo(0.15)
+  expect(windowShare(buckets, now - 30 * 24 * HOUR, now)).toBeCloseTo(0.1 + 0.99 + 0.05)
 })
 
-test("windowShare counts a partly out-of-window hour in part", () => {
+test("windowShare excludes a step before the fixed window start", () => {
   const now = 1000 * HOUR
-  // starts at now - 1h, so only 1h of the 2h bucket is inside the 5h window? No:
-  // hour buckets are 1h wide; start 4h before `now` keeps all of it inside.
   const buckets: Array<[number, number]> = [[now - 4 * HOUR, 0.05]]
-  expect(windowShare(buckets, now, 5 * HOUR)).toBeCloseTo(0.05)
-  // a bucket that began before `from` shares only its overlap
+  expect(windowShare(buckets, now - 5 * HOUR, now)).toBeCloseTo(0.05)
   const old: Array<[number, number]> = [[now - 5.5 * HOUR, 0.06]]
-  expect(windowShare(old, now, 5 * HOUR)).toBeCloseTo(0.03)
+  expect(windowShare(old, now - 5 * HOUR, now)).toBe(0)
 })
 
 test("windowShare tolerates malformed buckets", () => {
   const now = 1000 * HOUR
   const buckets = [[now - HOUR, 2]] as unknown as Array<[number, number]>
-  expect(windowShare(buckets, now, 5 * HOUR)).toBe(2)
+  expect(windowShare(buckets, now - 5 * HOUR, now)).toBe(2)
   const broken = [[5], "x"] as unknown as Array<[number, number]>
-  expect(windowShare(broken, now, 5 * HOUR)).toBe(0)
+  expect(windowShare(broken, now - 5 * HOUR, now)).toBe(0)
 })
 
 test("allowanceUsage divides by the window shares and reads the cooldown", () => {
@@ -58,6 +55,21 @@ test("allowanceUsage divides by the window shares and reads the cooldown", () =>
   expect(allowanceUsage(ledger, now).pctMonth).toBeCloseTo(0.1)
   expect(allowanceUsage(ledger, now).cooldown).toBe(true)
   expect(allowanceUsage({}, now).pct5h).toBe(0)
+})
+
+test("allowanceUsage uses the fixed window starts from the ledger", () => {
+  const now = 10 * HOUR
+  const ledger: LedgerData = {
+    allowance: {
+      buckets: [[now - HOUR, 0.1]],
+      window5hStart: now - 4 * HOUR,
+      windowWeekStart: now - 2 * 24 * HOUR,
+      windowMonthStart: now - 10 * 24 * HOUR,
+    },
+  }
+  expect(allowanceUsage(ledger, now).pct5h).toBeCloseTo(0.1 / 0.2)
+  expect(allowanceUsage(ledger, now).pctWeek).toBeCloseTo(0.1 / 0.5)
+  expect(allowanceUsage(ledger, now).pctMonth).toBeCloseTo(0.1)
 })
 
 test("allowanceUsage ignores expired cooldowns", () => {

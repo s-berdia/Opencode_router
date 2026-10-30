@@ -1,6 +1,6 @@
 // Shared types and the constant lists they are built from.
 
-export const PLAN_PROFILES = ["go", "go-plus", "free"] as const
+export const PLAN_PROFILES = ["go", "go-plus", "go-teams", "free"] as const
 
 export type PlanProfile = (typeof PLAN_PROFILES)[number]
 
@@ -197,6 +197,29 @@ export interface FeedConfig {
   timeoutMs?: number
 }
 
+/** How the router learns the current Go monthly caps. */
+export interface GoCapsConfig {
+  /** Fetch the cap table from the docs (default true). */
+  fetch?: boolean
+  /** Use a cached table for this many hours before fetching again. */
+  ttlHours?: number
+  /** The Go docs page or another page with the cap tables. */
+  url?: string
+}
+
+/** ISO starts for the weekly/monthly windows, from the OpenCode Console. */
+export interface AllowanceConfig {
+  weekStart?: string
+  monthStart?: string
+}
+
+/** What a model does with request data, from the Go docs. */
+export interface ModelPrivacy {
+  training: boolean
+  retention?: string
+  note?: string
+}
+
 /**
  * Live model health from OpenCode's public status page. Off by default, since
  * it is an external call during a routing rebuild.
@@ -229,7 +252,13 @@ export interface RouterUserConfig {
   roles?: Partial<Record<RoleName, Partial<RoleSpec>>>
   denyModels?: string[]
   allowModels?: string[]
-  privacy?: { freeModelsOk?: boolean }
+  privacy?: { freeModelsOk?: boolean; trainingOk?: boolean }
+  /** Allow paid `opencode/*` Zen models. Go Plus is a Go tier, not Zen credit. */
+  zenPaid?: boolean
+  /** How to fetch and cache the Go monthly cap table. */
+  caps?: GoCapsConfig
+  /** The console's weekly/monthly reset starts, if you want exact boundaries. */
+  allowance?: AllowanceConfig
   feeds?: FeedConfig
   /** Live model health from OpenCode's status page; off unless enabled. */
   status?: StatusConfig
@@ -259,8 +288,17 @@ export interface LedgerModelState {
  * cost divided by the monthly limit of its model.
  */
 export interface LedgerAllowance {
-  /** [start of the hour in ms, share of the monthly allowance used in that hour] */
+  /** [step timestamp in ms, share of the monthly allowance that step used] */
   buckets: Array<[number, number]>
+  /**
+   * Start of the current Go windows. The docs anchor the 5-hour window at the
+   * first request and reset it 5 hours later; weekly and monthly windows repeat
+   * on the same day/time. These lets the ledger follow those boundaries instead
+   * of a rolling "last N days" estimate.
+   */
+  window5hStart?: number
+  windowWeekStart?: number
+  windowMonthStart?: number
   cooldownUntil?: number
   lastError?: string
 }
@@ -281,6 +319,8 @@ export interface Ledger {
 export interface MonthlyCap {
   go: number | null
   goPlus: number | null
+  /** Go Teams is Go + $5 per model; absent falls back to `go + 5`. */
+  goTeams?: number | null
 }
 
 export interface ScoreTable {
@@ -298,8 +338,12 @@ export interface ScoreTable {
     /** Penalty applied to models with no explicit entry in `models`. */
     unvettedPenalty?: number
   }
-  /** Monthly USD allowance per model: { go, goPlus }. null = unlimited. */
+  /** Monthly USD allowance per model: { go, goPlus, goTeams }. null = unlimited. */
   monthlyCaps: Record<string, MonthlyCap>
+  /** Provenance of the fetched Go cap table, when one was used. */
+  goCaps?: { source: string; fetchedAt: string }
+  /** Per-model data policies from the Go docs. */
+  privacy?: Record<string, ModelPrivacy>
   /**
    * Score adjustment per plan and model class. On paid plans the subscription
    * models get an edge so the plan you pay for is used first and $0 models
@@ -348,7 +392,10 @@ export interface ResolvedConfig extends RouterUserConfig {
   enduranceScale: EnduranceScale
   denyModels: string[]
   allowModels: string[]
-  privacy: { freeModelsOk: boolean }
+  zenPaid: boolean
+  privacy: { freeModelsOk: boolean; trainingOk: boolean }
+  caps: { fetch: boolean; ttlHours: number; url: string }
+  allowance: AllowanceConfig
   /** Always present; `enabled` decides whether the status page is consulted. */
   status: Required<Pick<StatusConfig, "enabled" | "timeoutMs" | "unknownUptime">> & StatusConfig
 }

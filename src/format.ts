@@ -8,7 +8,8 @@ import { installedVersion } from "./update.js"
 export const PLAN_TIERS: Record<PlanProfile, string> = {
   free: "Zen $0 only",
   go: "Go subscription + Zen $0",
-  "go-plus": "Go subscription + Zen $0 + Zen paid",
+  "go-plus": "Go Plus caps + Zen $0",
+  "go-teams": "Go Teams caps + Zen $0",
 }
 
 /** Tokens in millions: `49.9` renders as "49.9M", `0.05` as "50K". */
@@ -47,7 +48,7 @@ export function formatScorecard(table: RoutingTable, opts: { verbose?: boolean }
   lines.push(`- Plan: **${table.plan}** (${PLAN_TIERS[table.plan]})`)
   lines.push(`- Updated: ${when} (UTC)`)
   lines.push(
-    `- Legend: go = Go subscription${table.plan === "free" ? "" : " (included in the Go allowance)"}, free* = $0 (data may be collected), paid = Zen pay-as-you-go (go-plus only, billed per token)`,
+    `- Legend: go = Go subscription${table.plan === "free" ? "" : " (included in the Go allowance)"}, free* = $0 (check the model's data policy), paid = Zen pay-as-you-go (Zen balance, billed per token)`,
   )
   lines.push(
     "- Mtok/5h = what one 5-hour window could buy of that model's monthly cap at its blended $/Mtok (cap x 20% / blended cost). A derived endurance figure, not measured usage.",
@@ -59,18 +60,25 @@ export function formatScorecard(table: RoutingTable, opts: { verbose?: boolean }
     lines.push("- Free plan: only `opencode` $0 models are eligible. Go subscription and Zen paid models are excluded.")
   } else if (table.plan === "go") {
     lines.push(
-      "- Go plan: `opencode-go` subscription models and `opencode` $0 models. Zen paid models are excluded; they need Go Plus.",
+      "- Go plan: `opencode-go` subscription models and `opencode` $0 models. Zen paid models need `zenPaid: true`.",
+    )
+  } else if (table.plan === "go-plus") {
+    lines.push(
+      "- Go Plus plan: higher Go caps. Zen paid models are separate; they need `zenPaid: true` and are billed per token.",
     )
   } else {
     lines.push(
-      "- Go Plus plan: `opencode-go` subscription models, `opencode` $0 models, and metered Zen paid models. Paid use is billed per token, not taken from the Go allowance.",
+      "- Go Teams plan: per-member Go caps. Zen paid models are separate; they need `zenPaid: true` and are billed per token.",
     )
   }
   if (table.plan !== "free") {
     lines.push(
-      "- All `go` models share one usage allowance. When it is near its limit, each agent uses the free model at the end of its list.",
+      "- All `go` models share one usage allowance: each step adds its cost divided by that model's monthly cap. Hitting 100% in a window blocks every paid Go model; unlimited Go free models still work.",
     )
   }
+  lines.push(
+    "- The 5-hour window starts with the first Go request; weekly and monthly windows repeat on the same day/time. Caps and data policies are fetched from the Go docs on refresh/status.",
+  )
   lines.push("")
   lines.push("| Role | # | Model | Var | Score | Intel | Speed | Endur | Rel | Mtok/5h | Cap/mo | Tier |")
   lines.push("| :-- | --: | :-- | :-- | --: | --: | --: | --: | --: | --: | --: | :-- |")
@@ -142,8 +150,13 @@ export function formatStatus(
   if (allowance) {
     const { usage } = allowance
     lines.push(
-      `- Go allowance used (estimate): 5 hours ${percent(usage.pct5h)}, 7 days ${percent(usage.pctWeek)}, 30 days ${percent(usage.pctMonth)}`,
+      `- Go allowance used (estimate): rolling 5h ${percent(usage.pct5h)}, weekly ${percent(usage.pctWeek)}, monthly ${percent(usage.pctMonth)}`,
     )
+    const resets: string[] = []
+    if (usage.resets5h !== undefined) resets.push(`5h ${new Date(usage.resets5h).toISOString().slice(11, 16)} UTC`)
+    if (usage.resetsWeek !== undefined) resets.push(`weekly ${new Date(usage.resetsWeek).toISOString().slice(0, 16).replace("T", " ")} UTC`)
+    if (usage.resetsMonth !== undefined) resets.push(`monthly ${new Date(usage.resetsMonth).toISOString().slice(0, 16).replace("T", " ")} UTC`)
+    if (resets.length > 0) lines.push(`- Window resets: ${resets.join(", ")}`)
     if (usage.cooldownUntil !== null) {
       const until = new Date(usage.cooldownUntil).toISOString().slice(11, 16)
       lines.push(`- Go allowance cooldown until ${until} UTC (${usage.cooldownReason ?? "usage limit"})`)
@@ -164,6 +177,12 @@ export function formatStatus(
       continue
     }
     lines.push(`| ${row.role} | \`${row.entry.id}\` | ${row.entry.rank} | ${row.state} |`)
+  }
+  const notes = table.notes.filter((note) => !note.startsWith("Dropped "))
+  if (notes.length > 0) {
+    lines.push("")
+    lines.push("**Notes**")
+    for (const note of notes) lines.push(`- ${note}`)
   }
   return lines.join("\n")
 }

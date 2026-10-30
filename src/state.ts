@@ -25,6 +25,11 @@ export function updateCheckFile(): string {
   return path.join(stateDir(), "update-check.json")
 }
 
+/** The fetched Go monthly caps and data policies, shared by the CLI and plugin. */
+export function goCapsFile(): string {
+  return path.join(stateDir(), "go-caps.json")
+}
+
 /** Small state file the TUI widget reads: active mode, per-session manual picks, last model in use. */
 export function hudFile(): string {
   return path.join(stateDir(), "hud.json")

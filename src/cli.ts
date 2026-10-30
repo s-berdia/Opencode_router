@@ -9,7 +9,7 @@ import { dedupeCatalog, loadCatalog } from "./catalog.js"
 import { installCommands } from "./install.js"
 import { runEval } from "./eval.js"
 import { editJsonFile, globalRouterConfigFile, isProjectDir, projectRouterConfigFile, readJson, scoreTableFile } from "./paths.js"
-import { ledgerFile, readApplyMarker } from "./state.js"
+import { ledgerFile, readApplyMarker, readLiveModels } from "./state.js"
 import { PACKAGE_NAME, checkForUpdate, clearOutdatedCopies, fetchLatestVersion, installedVersion, updateNotice } from "./update.js"
 import { isPlan, PLAN_PROFILES, ROLE_NAMES } from "./types.js"
 import type { ConfigScope, PlanProfile } from "./types.js"
@@ -19,13 +19,14 @@ import { selectArchetype } from "./archetype.js"
 import { emptyFeedScores } from "./scoring.js"
 import { loadUserConfig, resolveConfig } from "./config.js"
 import { loadDefaultTable } from "./score-table.js"
+import { goModelsFromCatalog, loadGoCaps, mergeGoCaps } from "./go-caps.js"
 
-const HELP = `opencode-router - dynamic model routing for OpenCode Go / Go Plus / Free
+const HELP = `opencode-router - dynamic model routing for OpenCode Go / Go Plus / Go Teams / Free
 
 Usage:
   opencode-router refresh [options]     Recompute the routing table and apply it
-  opencode-router status  [options]     Show the model in use per role and its 5-hour quota use
-  opencode-router plan <profile>        Save the plan profile (go | go-plus | free) and rebuild
+  opencode-router status  [options]     Show the model in use per role and the Go allowance
+  opencode-router plan <profile>        Save the plan profile (go | go-plus | go-teams | free) and rebuild
   opencode-router install [--scope]     Write slash-command files and a starter config
   opencode-router cat                   Show catalog metadata (path, date, model count)
   opencode-router eval                  Run the scoring stress test
@@ -33,9 +34,10 @@ Usage:
   opencode-router update                Look for a newer version and clear OpenCode's cached copy
 
 Options:
-  --plan <go|go-plus|free>   Plan profile for this run
+  --plan <go|go-plus|go-teams|free>   Plan profile for this run
   --scope <project|global>   Which config files to write (default: project in a project folder, else global)
   --catalog <file>           Path to an OpenCode models.json cache
+  --offline                  Do not fetch the Go cap table; use the cached/bundled copy
   --dry-run                  Do not write opencode.json
   --no-apply                 Write opencode.json but do not send it to a running server
   --json                     Print machine-readable JSON
@@ -64,6 +66,7 @@ interface CommonOpts {
   apply: boolean
   json: boolean
   verbose: boolean
+  offline: boolean
   cwd: string
   write: boolean
   check: boolean
@@ -105,6 +108,7 @@ function parseCommandLine(argv: string[], cwd: string) {
         catalog: { type: "string" },
         "dry-run": { type: "boolean" },
         "no-apply": { type: "boolean" },
+        offline: { type: "boolean" },
         json: { type: "boolean" },
         verbose: { type: "boolean" },
         write: { type: "boolean" },
@@ -137,6 +141,7 @@ function parseCommandLine(argv: string[], cwd: string) {
     apply: values["no-apply"] !== true,
     json: values.json === true,
     verbose: values.verbose === true,
+    offline: values.offline === true,
     cwd,
     write: values.write === true,
     check: values.check === true,
@@ -148,8 +153,26 @@ function parseCommandLine(argv: string[], cwd: string) {
   return { command: positionals[0], args: positionals.slice(1), help: values.help === true, opts }
 }
 
-function build(opts: CommonOpts) {
-  return buildRoutingTable({ plan: opts.plan, catalogFile: opts.catalog, projectDir: opts.cwd })
+async function build(opts: CommonOpts, forceCaps = false) {
+  const catalog = loadCatalog(opts.catalog)
+  const user = loadUserConfig(opts.cwd)
+  const capsConfig = user.config.caps
+  const live = readLiveModels()
+  const known = goModelsFromCatalog(catalog).filter((model) => !live || live.has(model.id))
+  const caps = await loadGoCaps({
+    known,
+    force: forceCaps,
+    fetch: !opts.offline && capsConfig?.fetch !== false,
+    ttlHours: capsConfig?.ttlHours,
+    url: capsConfig?.url,
+  })
+  return buildRoutingTable({
+    plan: opts.plan,
+    catalogFile: opts.catalog,
+    projectDir: opts.cwd,
+    goCaps: caps.caps,
+    notes: [...user.notes, ...(caps.note ? [caps.note] : [])],
+  })
 }
 
 async function writeUpdateNotice(opts: CommonOpts): Promise<void> {
@@ -158,7 +181,7 @@ async function writeUpdateNotice(opts: CommonOpts): Promise<void> {
 }
 
 async function cmdRefresh(opts: CommonOpts): Promise<number> {
-  const { table } = await build(opts)
+  const { table } = await build(opts, true)
 
   if (opts.json) {
     process.stdout.write(JSON.stringify({ table, routing: routingConfigBody(table) }, null, 2) + "\n")
@@ -190,14 +213,14 @@ async function cmdRefresh(opts: CommonOpts): Promise<number> {
         "A running OpenCode session recomputes routing on its next message (within 15 s). Restart to reload the UI display now.\n",
       )
     }
-    await writeUpdateNotice(opts)
+    if (!opts.offline) await writeUpdateNotice(opts)
   }
   return 0
 }
 
 async function cmdStatus(opts: CommonOpts): Promise<number> {
-  const result = await build(opts)
-  const ledger = new LedgerStore(ledgerFile())
+  const result = await build(opts, false)
+  const ledger = new LedgerStore(ledgerFile(), Date.now, result.cfg.allowance)
   const rows = statusRows(result, ledger)
   const version = installedVersion()
 
@@ -211,7 +234,7 @@ async function cmdStatus(opts: CommonOpts): Promise<number> {
   } else {
     const status = allowance && { usage: allowance, softThreshold: result.cfg.softThreshold }
     process.stdout.write(formatStatus(result.table, rows, status, version, result.cfg.mode) + "\n")
-    await writeUpdateNotice(opts)
+    if (!opts.offline) await writeUpdateNotice(opts)
   }
   return 0
 }
@@ -234,6 +257,28 @@ async function cmdPlan(profile: string | undefined, opts: CommonOpts): Promise<n
 
   process.stdout.write("\n")
   return cmdRefresh({ ...opts, plan: undefined })
+}
+
+async function cmdEval(opts: CommonOpts): Promise<number> {
+  const catalog = loadCatalog(opts.catalog)
+  const capsConfig = loadUserConfig(opts.cwd).config.caps
+  const live = readLiveModels()
+  const known = goModelsFromCatalog(catalog).filter((model) => !live || live.has(model.id))
+  const caps = await loadGoCaps({
+    known,
+    force: true,
+    fetch: !opts.offline && capsConfig?.fetch !== false,
+    ttlHours: capsConfig?.ttlHours,
+    url: capsConfig?.url,
+  })
+  return runEval({
+    plan: opts.plan,
+    catalog: opts.catalog,
+    json: opts.json,
+    projectDir: opts.cwd,
+    goCaps: caps.caps,
+    notes: caps.note ? [caps.note] : [],
+  })
 }
 
 async function cmdScores(opts: CommonOpts): Promise<number> {
@@ -265,6 +310,17 @@ async function cmdScores(opts: CommonOpts): Promise<number> {
   }
 
   const base = loadDefaultTable()
+  const capsConfig = loadUserConfig(opts.cwd).config.caps
+  const live = readLiveModels()
+  const caps = await loadGoCaps({
+    known: goModelsFromCatalog(raw).filter((model) => !live || live.has(model.id)),
+    force: false,
+    fetch: !opts.offline && capsConfig?.fetch !== false,
+    ttlHours: capsConfig?.ttlHours,
+    url: capsConfig?.url,
+  })
+  const rankingTable = structuredClone(base)
+  mergeGoCaps(rankingTable, caps.caps)
   let result
   try {
     // Score both provider namespaces even when the scorecard dedupes them: a
@@ -276,7 +332,7 @@ async function cmdScores(opts: CommonOpts): Promise<number> {
     return 1
   }
 
-  const archetypes = opts.top ? archetypeWinners(opts, raw, result.table, result.measured) : []
+  const archetypes = opts.top ? archetypeWinners(opts, raw, rankingTable, result.measured) : []
 
   if (opts.json) {
     process.stdout.write(
@@ -357,7 +413,7 @@ function archetypeWinners(
   const user = loadUserConfig(opts.cwd)
   // Widest eligibility: the winner report should not hide a model merely
   // because the local machine is on a narrower plan.
-  const cfg = resolveConfig(user.config, catalog, "go-plus")
+  const cfg = resolveConfig({ ...user.config, zenPaid: true }, catalog, "go-plus")
   return ROLE_NAMES.map((role) => {
     const selection = selectArchetype({
       catalog,
@@ -530,7 +586,7 @@ export async function main(argv: string[], cwd: string = process.cwd()): Promise
       case "install":
         return cmdInstall(opts)
       case "eval":
-        return await runEval({ plan: opts.plan, catalog: opts.catalog, json: opts.json, projectDir: opts.cwd })
+        return await cmdEval(opts)
       case "scores":
         return await cmdScores(opts)
       case "update":

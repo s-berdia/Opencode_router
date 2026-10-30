@@ -1,5 +1,6 @@
 import type { CatalogModel, PlanProfile, RankingEntry, ResolvedConfig, RoleName, RoleSpec, ScoreTable, ScoredModel } from "./types.js"
 import { modelClass, scoreModel, type FeedScores } from "./scoring.js"
+import { modelTrains } from "./privacy.js"
 import { uptimeScore, type HealthMap } from "./status.js"
 
 export function globToRegex(glob: string): RegExp {
@@ -16,20 +17,20 @@ export function matchesAny(id: string, globs: string[]): boolean {
  *
  *   free     -> `opencode/*` $0 models only
  *   go       -> every `opencode-go/*` model, plus `opencode/*` $0 models
- *   go-plus  -> the Go tier, plus paid `opencode/*` (pay-as-you-go) models
+ *   go-plus  -> Go Plus caps, plus paid `opencode/*` only with `zenPaid`
+ *   go-teams -> Go Teams caps, plus paid `opencode/*` only with `zenPaid`
  *
- * The paid Zen tier is deliberately unreachable below go-plus: a routing
- * mistake there would spend real pay-as-you-go money on a plan that does not
- * include it. `opencode-go/*` free models still require a Go subscription, so
- * they are not part of the free plan.
+ * Go Plus and Go Teams are Go tiers, not Zen credit. Paid Zen is a separate
+ * balance and must be opted into with `zenPaid: true`; otherwise a routing
+ * mistake would spend real pay-as-you-go money. `opencode-go/*` free models
+ * still require a Go subscription, so they are not part of the free plan.
  */
-export function providerAllowed(model: CatalogModel, plan: PlanProfile): boolean {
+export function providerAllowed(model: CatalogModel, plan: PlanProfile, zenPaid = false): boolean {
   if (model.providerID === "opencode") {
-    // Zen carries both the $0 tier (every plan) and the paid tier (Go Plus).
-    return model.free || plan === "go-plus"
+    return model.free || (zenPaid && plan !== "free")
   }
   if (model.providerID === "opencode-go") {
-    return plan === "go" || plan === "go-plus"
+    return plan !== "free"
   }
   return false
 }
@@ -74,7 +75,7 @@ export function ineligibilityReason(
   cfg: ResolvedConfig,
   health: HealthMap = new Map(),
 ): IneligibilityReason | null {
-  if (!providerAllowed(model, cfg.plan)) return "plan"
+  if (!providerAllowed(model, cfg.plan, cfg.zenPaid)) return "plan"
   const requirement = requirementFailure(model, role)
   if (requirement) return requirement
   // A subscription model is only usable when the table knows its allowance;
@@ -85,6 +86,8 @@ export function ineligibilityReason(
   if (cfg.allowModels.length > 0 && !matchesAny(model.id, cfg.allowModels)) return "not-allowed"
   // Privacy: paid plans must not silently use data-collecting free models for real work.
   if (!cfg.privacy.freeModelsOk && model.free && !role.preferFree) return "privacy"
+  // Training is separate from price: Muse Spark Contributor is paid and trains.
+  if (!cfg.privacy.trainingOk && modelTrains(model.id, table)) return "privacy"
   // A model that spends most of its week broken is not a candidate at all.
   // Untracked models keep their score: "unmeasured" is not "unreliable".
   const floor = cfg.status.minUptime

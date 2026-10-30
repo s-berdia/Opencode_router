@@ -102,13 +102,29 @@ describe("LedgerStore shared Go allowance", () => {
     expect(allowance.pctMonth).toBeCloseTo(0.1, 5)
   })
 
-  it("counts the part of an hour that is still in the window", () => {
+  it("anchors the 5-hour window at the first step and resets it five hours later", () => {
     let now = 10 * DAY
     const store = new LedgerStore(tmpFile(), () => now)
     store.record("opencode-go/x", 1, 10, 0.1)
-    now += 5.5 * HOUR
-    // Half of the recorded hour is inside the last 5 hours.
-    expect(store.allowance().pct5h).toBeCloseTo(0.25, 5)
+    now += 4 * HOUR
+    expect(store.allowance().pct5h).toBeCloseTo(0.5, 5)
+
+    now += 1.5 * HOUR
+    // The first step is outside the reset window, so the current one is empty.
+    expect(store.allowance().pct5h).toBe(0)
+    expect(store.allowance().resets5h).toBe(10 * DAY + 10 * HOUR)
+  })
+
+  it("uses configured weekly and monthly starts from the console", () => {
+    const now = Date.parse("2026-10-30T18:00:00Z")
+    const store = new LedgerStore(tmpFile(), () => now, {
+      weekStart: "2026-10-25T23:57:00Z",
+      monthStart: "2026-10-26T19:57:00Z",
+    })
+    store.record("opencode-go/x", 1, 10, 0.1)
+    const allowance = store.allowance()
+    expect(allowance.resetsWeek).toBe(Date.parse("2026-11-01T23:57:00Z"))
+    expect(allowance.resetsMonth).toBe(Date.parse("2026-11-26T19:57:00Z"))
   })
 
   it("ignores records without a share", () => {

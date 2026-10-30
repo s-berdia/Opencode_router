@@ -125,7 +125,9 @@ export function monthlyCapFor(modelId: string, table: ScoreTable, plan: PlanProf
   if (plan === "free") return null
   const entry = table.monthlyCaps[modelId]
   if (!entry) return null
-  return plan === "go-plus" ? entry.goPlus : entry.go
+  if (plan === "go-plus") return entry.goPlus
+  if (plan === "go-teams") return entry.goTeams ?? (entry.go === null ? null : entry.go + 5)
+  return entry.go
 }
 
 function logScale(value: number, min: number, max: number): number {

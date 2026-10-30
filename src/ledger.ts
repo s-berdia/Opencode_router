@@ -11,6 +11,8 @@ export const WINDOW_5H = 5 * HOUR
 export const WINDOW_WEEK = 7 * DAY
 export const WINDOW_MONTH = 30 * DAY
 
+type AllowancePeriod = "5h" | "week" | "month"
+
 
 function emptyState(now: number): LedgerModelState {
   return {
@@ -73,6 +75,88 @@ function mtimeOf(file: string): number {
   }
 }
 
+/** Add calendar months in UTC, clamping Jan 31 + 1 month to the last day of February. */
+function addMonths(timestamp: number, months: number): number {
+  const date = new Date(timestamp)
+  const day = date.getUTCDate()
+  date.setUTCDate(1)
+  date.setUTCMonth(date.getUTCMonth() + months)
+  const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate()
+  date.setUTCDate(Math.min(day, last))
+  return date.getTime()
+}
+
+/** The current window start: the latest period boundary at or before `now`. */
+function advanceWindow(start: number, now: number, period: AllowancePeriod): number {
+  if (!Number.isFinite(start) || start > now) return now
+  if (period === "5h") return start + Math.floor((now - start) / WINDOW_5H) * WINDOW_5H
+  if (period === "week") return start + Math.floor((now - start) / WINDOW_WEEK) * WINDOW_WEEK
+  let current = start
+  for (let i = 0; i < 240 && addMonths(current, 1) <= now; i++) current = addMonths(current, 1)
+  return current
+}
+
+/** The next reset after `now`. */
+function nextWindow(start: number, now: number, period: AllowancePeriod): number {
+  if (period === "5h") return advanceWindow(start, now, period) + WINDOW_5H
+  if (period === "week") return advanceWindow(start, now, period) + WINDOW_WEEK
+  let next = addMonths(advanceWindow(start, now, period), 1)
+  for (let i = 0; i < 240 && next <= now; i++) next = addMonths(next, 1)
+  return next
+}
+
+/** The earliest stored step at or after `from`, or `fallback`. */
+function firstAtOrAfter(buckets: Array<[number, number]>, from: number, fallback: number): number {
+  let first: number | undefined
+  for (const [at] of buckets) {
+    if (at >= from && (first === undefined || at < first)) first = at
+  }
+  return first ?? fallback
+}
+
+/**
+ * Version 2 ledgers written before the fixed-window change have hourly buckets
+ * and no starts. Anchor each window at the first step still visible in it, so
+ * the upgrade does not throw the current cycle away.
+ */
+function ensureWindowAnchors(ledger: Ledger, now: number): void {
+  if (!ledger.allowance || !Array.isArray(ledger.allowance.buckets)) ledger.allowance = { buckets: [] }
+  const allowance = ledger.allowance
+  allowance.buckets = allowance.buckets.filter(
+    (bucket): bucket is [number, number] =>
+      Array.isArray(bucket) && typeof bucket[0] === "number" && typeof bucket[1] === "number" && Number.isFinite(bucket[1]),
+  )
+  if (typeof allowance.window5hStart !== "number") {
+    allowance.window5hStart = firstAtOrAfter(allowance.buckets, now - WINDOW_5H, now)
+  }
+  if (typeof allowance.windowWeekStart !== "number") {
+    allowance.windowWeekStart = firstAtOrAfter(allowance.buckets, now - WINDOW_WEEK, now)
+  }
+  if (typeof allowance.windowMonthStart !== "number") {
+    allowance.windowMonthStart = firstAtOrAfter(allowance.buckets, now - 40 * DAY, now)
+  }
+}
+
+/** Current starts, advanced past any window that has ended. */
+function currentStarts(allowance: LedgerAllowance, now: number): { w5: number; week: number; month: number } {
+  const w5 = advanceWindow(allowance.window5hStart ?? now, now, "5h")
+  const week = advanceWindow(allowance.windowWeekStart ?? now, now, "week")
+  const month = advanceWindow(allowance.windowMonthStart ?? now, now, "month")
+  allowance.window5hStart = w5
+  allowance.windowWeekStart = week
+  allowance.windowMonthStart = month
+  return { w5, week, month }
+}
+
+/** Sum of the shares whose step time is inside [from, now]. */
+function windowShareFrom(buckets: Array<[number, number]>, from: number, now: number): number {
+  let sum = 0
+  for (const [at, share] of buckets) {
+    if (at >= from && at <= now) sum += share
+  }
+  return sum
+}
+
 /** One completed assistant step, as `session.step.ended` reports it. */
 export interface StepRecord {
   /** `assistantMessageID`; when set, a step is counted once across hosts. */
@@ -100,6 +184,10 @@ export interface AllowanceUsage {
   pct5h: number
   pctWeek: number
   pctMonth: number
+  /** When each window next resets, in ms. */
+  resets5h?: number
+  resetsWeek?: number
+  resetsMonth?: number
   cooldownUntil: number | null
   /** Why the cooldown started; null without a cooldown. */
   cooldownReason: string | null
@@ -116,8 +204,20 @@ export class LedgerStore {
   constructor(
     private readonly file: string,
     private readonly now: () => number = Date.now,
+    anchors?: { weekStart?: number | string; monthStart?: number | string },
   ) {
     this.data = this.load()
+    this.applyAnchors(anchors)
+  }
+
+  /** Use the console's exact weekly/monthly starts when the user configured them. */
+  private applyAnchors(anchors?: { weekStart?: number | string; monthStart?: number | string }): void {
+    if (!anchors) return
+    const allowance = this.sharedAllowance()
+    const week = typeof anchors.weekStart === "number" ? anchors.weekStart : Date.parse(anchors.weekStart ?? "")
+    const month = typeof anchors.monthStart === "number" ? anchors.monthStart : Date.parse(anchors.monthStart ?? "")
+    if (Number.isFinite(week)) allowance.windowWeekStart = week
+    if (Number.isFinite(month)) allowance.windowMonthStart = month
   }
 
   /** Read the file. A corrupt file is kept as `<file>.corrupt-<time>` and a new ledger starts. */
@@ -125,7 +225,10 @@ export class LedgerStore {
     this.loadedMtime = mtimeOf(this.file)
     const result = readJsonFile(this.file)
     if (result.status === "ok") {
-      if (isLedger(result.value)) return result.value
+      if (isLedger(result.value)) {
+        ensureWindowAnchors(result.value, this.now())
+        return result.value
+      }
       if (isLegacyLedger(result.value)) {
         const migrated = migrateLegacy(result.value, this.now())
         try {
@@ -198,7 +301,7 @@ export class LedgerStore {
     this.sync()
     if (step.stepID && this.hasStep(step.stepID)) return false
 
-    const now = step.at ?? this.now()
+    const at = step.at ?? this.now()
     const state = this.stateFor(step.modelId)
     const cost = Number.isFinite(step.costUSD) ? step.costUSD : 0
     const tokens = Number.isFinite(step.tokens) ? Math.max(0, step.tokens) : 0
@@ -211,7 +314,7 @@ export class LedgerStore {
     state.lastUsedAt = this.now()
 
     const share = Number.isFinite(step.allowanceShare) ? (step.allowanceShare ?? 0) : 0
-    if (share > 0) this.addShare(share, now)
+    if (share > 0) this.addShare(share, at)
     if (step.stepID) this.rememberStep(step.stepID)
     this.save()
     return true
@@ -241,14 +344,24 @@ export class LedgerStore {
     return this.data.allowance
   }
 
-  private addShare(share: number, now: number): void {
+  private addShare(share: number, at: number): void {
     const allowance = this.sharedAllowance()
-    const hour = Math.floor(now / HOUR) * HOUR
-    const current = this.now()
-    allowance.buckets = allowance.buckets.filter(([start]) => start + HOUR > current - WINDOW_MONTH)
-    const bucket = allowance.buckets.find(([start]) => start === hour)
-    if (bucket) bucket[1] += share
-    else allowance.buckets.push([hour, share])
+    const now = this.now()
+    // On the first step, the window starts at that step. Later steps use the
+    // wall clock so a delayed/old event cannot move the window backwards.
+    const windowNow =
+      typeof allowance.window5hStart === "number" && typeof allowance.windowWeekStart === "number" && typeof allowance.windowMonthStart === "number"
+        ? Math.max(at, now)
+        : at
+    currentStarts(allowance, windowNow)
+    // One entry per step, so a window boundary between two steps is exact.
+    allowance.buckets.push([at, share])
+    const keepFrom = Math.min(
+      allowance.windowMonthStart ?? now,
+      allowance.windowWeekStart ?? now,
+      allowance.window5hStart ?? now,
+    )
+    allowance.buckets = allowance.buckets.filter(([timestamp]) => timestamp >= keepFrom - 2 * DAY)
   }
 
   cooldown(modelId: string, durationMs: number, reason?: string): void {
@@ -289,16 +402,21 @@ export class LedgerStore {
     }
   }
 
-  /** Rolling use of the shared allowance in the last 5 hours, 7 days, and 30 days. */
+  /** Use of the shared allowance in the current 5-hour, weekly, and monthly windows. */
   allowance(): AllowanceUsage {
     this.sync()
     const allowance = this.sharedAllowance()
     const now = this.now()
-    const cooldownUntil = allowance.cooldownUntil !== undefined && now < allowance.cooldownUntil ? allowance.cooldownUntil : null
+    const starts = currentStarts(allowance, now)
+    const cooldownUntil =
+      allowance.cooldownUntil !== undefined && now < allowance.cooldownUntil ? allowance.cooldownUntil : null
     return {
-      pct5h: windowShare(allowance.buckets, now, WINDOW_5H) / FIVE_HOUR_SHARE,
-      pctWeek: windowShare(allowance.buckets, now, WINDOW_WEEK) / WEEK_SHARE,
-      pctMonth: windowShare(allowance.buckets, now, WINDOW_MONTH),
+      pct5h: windowShareFrom(allowance.buckets, starts.w5, now) / FIVE_HOUR_SHARE,
+      pctWeek: windowShareFrom(allowance.buckets, starts.week, now) / WEEK_SHARE,
+      pctMonth: windowShareFrom(allowance.buckets, starts.month, now),
+      resets5h: nextWindow(starts.w5, now, "5h"),
+      resetsWeek: nextWindow(starts.week, now, "week"),
+      resetsMonth: nextWindow(starts.month, now, "month"),
       cooldownUntil,
       cooldownReason: cooldownUntil === null ? null : (allowance.lastError ?? null),
     }
@@ -319,20 +437,4 @@ export class LedgerStore {
     writeJson(this.file, this.data)
     this.loadedMtime = mtimeOf(this.file)
   }
-}
-
-/**
- * Sum of the shares in the last `windowMs`. The use in one hour is taken as
- * even, so an hour that is partly inside the window counts in part.
- */
-function windowShare(buckets: Array<[number, number]>, now: number, windowMs: number): number {
-  const from = now - windowMs
-  let sum = 0
-  for (const [start, share] of buckets) {
-    const end = Math.min(start + HOUR, now)
-    if (end <= from || start > now) continue
-    const span = end - start
-    sum += span <= 0 ? share : (share * (end - Math.max(start, from))) / span
-  }
-  return sum
 }

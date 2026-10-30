@@ -53,7 +53,7 @@ describe("user config problems", () => {
   it("ignores an unknown plan and says so", async () => {
     writeGlobalConfig(JSON.stringify({ plan: "gold" }))
     const { table } = await build()
-    expect(["go", "go-plus", "free"]).toContain(table.plan)
+    expect(["go", "go-plus", "go-teams", "free"]).toContain(table.plan)
     expect(table.notes.join("\n")).toMatch(/gold/)
   })
 

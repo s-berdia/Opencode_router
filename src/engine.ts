@@ -4,8 +4,10 @@ import { dedupeCatalog, loadCatalog } from "./catalog.js"
 import { loadFeedScores } from "./feeds.js"
 import { loadUserConfig, resolveConfig } from "./config.js"
 import { resolveTable } from "./score-table.js"
+import { mergeGoCaps, type GoCaps } from "./go-caps.js"
 import { rankRole } from "./rank.js"
 import { monthlyCapFor, type FeedScores } from "./scoring.js"
+import { modelTrains } from "./privacy.js"
 import { healthForCatalog, loadStatusHealth, type HealthMap } from "./status.js"
 import { catalogCacheFile } from "./paths.js"
 import { readLiveModels } from "./state.js"
@@ -26,6 +28,8 @@ export interface BuildOptions {
    * not pass a set; an empty set means "no live data", not "no models".
    */
   liveModelIDs?: ReadonlySet<string>
+  /** Fetched Go caps/policies; the bundled table is the offline fallback. */
+  goCaps?: GoCaps
   notes?: string[]
 }
 
@@ -75,6 +79,7 @@ export async function buildRoutingTable(opts: BuildOptions = {}): Promise<BuildR
 
   const cfg = resolveConfig(user.config, catalog, opts.plan)
   const scoreTable = resolveTable(user.config)
+  mergeGoCaps(scoreTable, opts.goCaps)
 
   let feeds = opts.feeds
   if (!feeds) {
@@ -101,6 +106,33 @@ export async function buildRoutingTable(opts: BuildOptions = {}): Promise<BuildR
       chains[role] = rankRole(catalog, role, scoreTable, planCfg, feeds, health)
     }
     profiles[plan] = chains
+  }
+
+  if (opts.goCaps) {
+    notes.push(`Go caps: fetched ${opts.goCaps.fetchedAt} from ${opts.goCaps.source}.`)
+    const missing = catalog
+      .filter((model) => model.providerID === "opencode-go" && !model.free && !scoreTable.monthlyCaps[model.id])
+      .map((model) => model.id)
+    if (missing.length > 0) {
+      notes.push(`Go caps missing for ${missing.join(", ")}; those models are not routed.`)
+    }
+    if (opts.goCaps.unmatched.length > 0) {
+      notes.push(`Go caps: docs rows without a catalog match: ${opts.goCaps.unmatched.join(", ")}.`)
+    }
+  }
+
+  if (cfg.privacy.trainingOk) {
+    const training = new Set<string>()
+    for (const role of ROLE_NAMES) {
+      for (const entry of profiles[cfg.plan]?.[role] ?? []) {
+        if (modelTrains(entry.id, scoreTable)) training.add(entry.id)
+      }
+    }
+    if (training.size > 0) {
+      notes.push(
+        `Data policy: ${[...training].join(", ")} may train on request data. Set "privacy": { "trainingOk": false } or denyModels to avoid it.`,
+      )
+    }
   }
 
   const table: RoutingTable = {

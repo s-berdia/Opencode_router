@@ -14,8 +14,8 @@ function table() {
   return t
 }
 
-function cfgFor(plan: PlanProfile) {
-  return resolveConfig({ plan }, sampleCatalog, plan)
+function cfgFor(plan: PlanProfile, zenPaid = false) {
+  return resolveConfig({ plan, zenPaid }, sampleCatalog, plan)
 }
 
 describe("plan tiers", () => {
@@ -38,21 +38,28 @@ describe("plan tiers", () => {
     expect(providerAllowed(zenPaid, "go")).toBe(false)
   })
 
-  it("go-plus adds the paid Zen tier", () => {
+  it("go-plus uses Go Plus caps and paid Zen only with zenPaid", () => {
     expect(providerAllowed(zenFree, "go-plus")).toBe(true)
     expect(providerAllowed(goFree, "go-plus")).toBe(true)
     expect(providerAllowed(goPaid, "go-plus")).toBe(true)
-    expect(providerAllowed(zenPaid, "go-plus")).toBe(true)
+    expect(providerAllowed(zenPaid, "go-plus")).toBe(false)
+    expect(providerAllowed(zenPaid, "go-plus", true)).toBe(true)
   })
 
   it("never routes a provider the router does not know", () => {
     expect(providerAllowed(model({ providerID: "other", modelID: "x" }), "go-plus")).toBe(false)
   })
+
+  it("go-teams uses Go caps and keeps paid Zen opt-in", () => {
+    expect(providerAllowed(goPaid, "go-teams")).toBe(true)
+    expect(providerAllowed(zenPaid, "go-teams")).toBe(false)
+    expect(providerAllowed(zenPaid, "go-teams", true)).toBe(true)
+  })
 })
 
 describe("go-plus paid tier", () => {
   it("puts a paid Zen model in a go-plus chain and never on go or free", () => {
-    const goPlus = rankRole(sampleCatalog, "build", table(), cfgFor("go-plus"), emptyFeedScores())
+    const goPlus = rankRole(sampleCatalog, "build", table(), cfgFor("go-plus", true), emptyFeedScores())
     expect(goPlus.some((entry) => entry.id === "opencode/zen-paid" && entry.class === "paid")).toBe(true)
 
     for (const plan of ["go", "free"] as const) {
@@ -64,7 +71,7 @@ describe("go-plus paid tier", () => {
   it("does not apply the subscription unknown-cap rule to a metered Zen model", () => {
     const t = table()
     const role = t.roles.build!
-    const cfg = cfgFor("go-plus")
+    const cfg = cfgFor("go-plus", true)
     const paid = model({ providerID: "opencode", modelID: "zen-paid", cost: { input: 2, output: 6 } })
     const subscription = model({ providerID: "opencode-go", modelID: "no-cap" })
 
@@ -115,12 +122,24 @@ describe("rankRole", () => {
   })
 
   it("privacy=false removes free models from real-work roles only", () => {
-    const cfg = { ...cfgFor("go"), privacy: { freeModelsOk: false } }
+    const cfg = { ...cfgFor("go"), privacy: { freeModelsOk: false, trainingOk: true } }
     const build = rankRole(sampleCatalog, "build", table(), cfg, emptyFeedScores())
     expect(build.some((e) => e.class === "free")).toBe(false)
 
     const explore = rankRole(sampleCatalog, "explore", table(), cfg, emptyFeedScores())
     expect(explore.length).toBeGreaterThan(0)
+  })
+
+  it("trainingOk=false excludes a paid model that trains on request data", () => {
+    const t = table()
+    const policy = model({
+      providerID: "opencode-go",
+      modelID: "muse-spark-1.2-contributor",
+      cost: { input: 0.1, output: 0.2 },
+    })
+    t.monthlyCaps[policy.id] = { go: 60, goPlus: 120, goTeams: 65 }
+    const cfg = { ...cfgFor("go"), privacy: { freeModelsOk: true, trainingOk: false } }
+    expect(ineligibilityReason(policy, t.roles.build!, t, cfg)).toBe("privacy")
   })
 
   it("explore weighs search capability above raw speed (issue #16)", () => {
@@ -170,7 +189,7 @@ describe("free fallback", () => {
   })
 
   it("adds no free model when privacy.freeModelsOk is false", () => {
-    const cfg = { ...cfgFor("go"), privacy: { freeModelsOk: false } }
+    const cfg = { ...cfgFor("go"), privacy: { freeModelsOk: false, trainingOk: true } }
     const chain = rankRole(catalog, "build", goTable(), cfg, emptyFeedScores())
     expect(chain.some((e) => e.class === "free")).toBe(false)
   })
@@ -193,7 +212,7 @@ describe("free fallback", () => {
     })
     t.models[metered.id] = { intelligence: 93, speed: 60 }
 
-    const chain = rankRole([...subs, metered, free], "build", t, cfgFor("go-plus"), emptyFeedScores())
+    const chain = rankRole([...subs, metered, free], "build", t, cfgFor("go-plus", true), emptyFeedScores())
 
     expect(chain).toHaveLength(4)
     expect(chain.some((entry) => entry.id === metered.id)).toBe(true)

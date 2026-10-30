@@ -14,11 +14,14 @@ export const WEEK_SHARE = 0.5
 
 export const DEFAULT_SOFT_THRESHOLD = 0.85
 
-/** `[score, weight]` pairs: an hour bucket of the shared Go allowance. */
+/** `[step timestamp, share]` pairs: one step's use of the shared Go allowance. */
 export type LedgerBucket = [number, number]
 
 export interface LedgerAllowanceData {
   buckets?: LedgerBucket[]
+  window5hStart?: number
+  windowWeekStart?: number
+  windowMonthStart?: number
   cooldownUntil?: number
 }
 
@@ -59,34 +62,49 @@ export interface AllowanceUsage {
   cooldown: boolean
 }
 
-/**
- * Sum of the shares in the last `windowMs`. The use in one hour is taken as
- * even, so an hour that is partly inside the window counts in part.
- * Mirrors `src/ledger.ts` windowShare.
- */
-export function windowShare(buckets: LedgerBucket[], now: number, windowMs: number): number {
+/** Sum of the shares whose step time is inside [from, now]. Mirrors `src/ledger.ts`. */
+export function windowShare(buckets: LedgerBucket[], from: number, now: number): number {
   if (!Array.isArray(buckets)) return 0
-  const from = now - windowMs
   let sum = 0
   for (const entry of buckets) {
     if (!Array.isArray(entry)) continue
-    const [start, share] = entry
-    if (typeof start !== "number" || typeof share !== "number") continue
-    const end = Math.min(start + HOUR, now)
-    if (end <= from || start > now) continue
-    const span = end - start
-    sum += span <= 0 ? share : (share * (end - Math.max(start, from))) / span
+    const [at, share] = entry
+    if (typeof at !== "number" || typeof share !== "number") continue
+    if (at >= from && at <= now) sum += share
   }
   return sum
+}
+
+/** The latest period boundary at or before `now`. */
+function advanceWindow(start: number | undefined, now: number, period: "5h" | "week" | "month"): number | undefined {
+  if (start === undefined || !Number.isFinite(start) || start > now) return start
+  if (period === "5h") return start + Math.floor((now - start) / WINDOW_5H) * WINDOW_5H
+  if (period === "week") return start + Math.floor((now - start) / WINDOW_WEEK) * WINDOW_WEEK
+  let current = start
+  for (let i = 0; i < 240 && addMonths(current, 1) <= now; i++) current = addMonths(current, 1)
+  return current
+}
+
+function addMonths(timestamp: number, months: number): number {
+  const date = new Date(timestamp)
+  const day = date.getUTCDate()
+  date.setUTCDate(1)
+  date.setUTCMonth(date.getUTCMonth() + months)
+  const last = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate()
+  date.setUTCDate(Math.min(day, last))
+  return date.getTime()
 }
 
 export function allowanceUsage(ledger: LedgerData | undefined, now: number): AllowanceUsage {
   const buckets = ledger?.allowance?.buckets ?? []
   const cooldownUntil = ledger?.allowance?.cooldownUntil
+  const w5 = advanceWindow(ledger?.allowance?.window5hStart, now, "5h") ?? now - WINDOW_5H
+  const week = advanceWindow(ledger?.allowance?.windowWeekStart, now, "week") ?? now - WINDOW_WEEK
+  const month = advanceWindow(ledger?.allowance?.windowMonthStart, now, "month") ?? now - WINDOW_MONTH
   return {
-    pct5h: windowShare(buckets, now, WINDOW_5H) / FIVE_HOUR_SHARE,
-    pctWeek: windowShare(buckets, now, WINDOW_WEEK) / WEEK_SHARE,
-    pctMonth: windowShare(buckets, now, WINDOW_MONTH),
+    pct5h: windowShare(buckets, w5, now) / FIVE_HOUR_SHARE,
+    pctWeek: windowShare(buckets, week, now) / WEEK_SHARE,
+    pctMonth: windowShare(buckets, month, now),
     cooldown: cooldownUntil !== undefined && now < cooldownUntil,
   }
 }

@@ -40,7 +40,7 @@ describe("cli refresh", () => {
   it("rejects an unknown plan", async () => {
     const { result, stderr } = await run("refresh", "--plan", "gold", "--dry-run")
     expect(result).toBe(2)
-    expect(stderr).toMatch(/go \| go-plus \| free/)
+    expect(stderr).toMatch(/go \| go-plus \| go-teams \| free/)
   })
 
   it("prints help for --help and writes nothing", async () => {
@@ -70,7 +70,7 @@ describe("cli status", () => {
 
     const { stdout } = await run("status", "--scope", "global")
 
-    expect(stdout).toContain("Go allowance used (estimate): 5 hours 90%, 7 days 36%, 30 days 18%")
+    expect(stdout).toContain("Go allowance used (estimate): rolling 5h 90%, weekly 36%, monthly 18%")
     expect(stdout).toMatch(/\| build \| `opencode\/[^`]+-free` \| \d \| free-fallback \|/)
   })
 

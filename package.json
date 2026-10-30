@@ -1,7 +1,7 @@
 {
   "name": "@s-berdia/opencode-router",
-  "version": "1.3.1",
-  "description": "Automatic model routing and quota failover for OpenCode Go, Go Plus, and Free. Switches models before you hit your limit.",
+  "version": "1.4.0",
+  "description": "Automatic model routing and quota failover for OpenCode Go, Go Plus, Go Teams, and Free. Switches models before you hit your limit.",
   "type": "module",
   "license": "MIT",
   "author": "s-berdia",

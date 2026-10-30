@@ -2,11 +2,14 @@ import { execFile } from "node:child_process"
 import path from "node:path"
 import { Plugin } from "@opencode/plugin"
 import { allowanceShare, buildRoutingTable, healthCheck, pickForRole, usesAllowance, type BuildResult } from "./engine.js"
-import { LedgerStore } from "./ledger.js"
+import { LedgerStore, WINDOW_5H, WINDOW_MONTH, WINDOW_WEEK } from "./ledger.js"
 import { allowanceCost } from "./allowance.js"
+import { goModelsFromCatalog, loadGoCaps } from "./go-caps.js"
+import { loadCatalog } from "./catalog.js"
+import { loadUserConfig } from "./config.js"
 import { routingConfigBody } from "./apply.js"
 import { cliArgsFor, cliScriptPath, commandArguments, SLASH_COMMANDS } from "./commands.js"
-import { writeJson } from "./paths.js"
+import { catalogCacheFile, writeJson } from "./paths.js"
 import type { HudSnapshot } from "./state.js"
 import { hudFile, ledgerFile, readLiveModels, routingTableFile, writeApplyMarker, readApplyMarker, writeLiveModels } from "./state.js"
 import { isAgentRole, type CatalogModel, type RankingEntry } from "./types.js"
@@ -56,6 +59,27 @@ function isUsageLimitError(error: unknown): boolean {
 function isRateLimitError(error: unknown): boolean {
   const { status, message } = errorData(error)
   return status === 429 || isUsageLimitError(error) || /rate.?limit|too many requests|capacity|overloaded/.test(message)
+}
+
+/**
+ * The Go usage-limit error says "Resets in 40min" (or the window name). Use
+ * that reset, not a fixed hour: a 5-hour block can have four hours left, and a
+ * monthly block can have days.
+ */
+export function usageLimitCooldownMs(error: unknown): number {
+  const { message } = errorData(error)
+  const match = /resets?\s+in\s+(\d+(?:\.\d+)?)\s*(min(?:ute)?s?|m|h(?:ou)?rs?|h|d(?:ay)?s?)\b/i.exec(message)
+  if (match) {
+    const value = Number(match[1])
+    const unit = match[2]!.toLowerCase()
+    const multiplier = unit.startsWith("d") ? 24 * 3_600_000 : unit === "m" || unit.startsWith("min") ? 60_000 : 3_600_000
+    const ms = value * multiplier
+    if (Number.isFinite(ms)) return Math.min(31 * 24 * 3_600_000, Math.max(60_000, ms))
+  }
+  if (/5[- ]hour|rolling/i.test(message)) return WINDOW_5H
+  if (/weekly|week/i.test(message)) return WINDOW_WEEK
+  if (/monthly|month/i.test(message)) return WINDOW_MONTH
+  return 60 * 60 * 1000
 }
 
 function isAuthError(error: unknown): boolean {
@@ -148,7 +172,7 @@ export const RouterPlugin = Plugin.define({
   id: "opencode-router",
   async setup(ctx) {
     const dir = ctx.location.directory
-    const ledger = new LedgerStore(ledgerFile(), () => Date.now())
+    const ledger = new LedgerStore(ledgerFile(), () => Date.now(), loadUserConfig(dir).config.allowance)
     /** Deduped assistant step ids, so the ledger counts a step once. */
     const recordedSteps = new Set<string>()
     /** Last tracked model per session: switches and, later, completed steps. */
@@ -229,7 +253,23 @@ export const RouterPlugin = Plugin.define({
     async function ensure(force = false): Promise<BuildResult> {
       const now = Date.now()
       if (!force && cached && now - cachedAt < TTL_MS) return cached
-      const result = await buildRoutingTable({ projectDir: dir, liveModelIDs: await liveModelIDs(force) })
+      const catalog = loadCatalog(catalogCacheFile())
+      const live = await liveModelIDs(force)
+      const known = goModelsFromCatalog(catalog).filter((model) => !live || live.has(model.id))
+      const capConfig = loadUserConfig(dir).config.caps
+      const caps = await loadGoCaps({
+        known,
+        force: false,
+        fetch: capConfig?.fetch !== false,
+        ttlHours: capConfig?.ttlHours,
+        url: capConfig?.url,
+      })
+      const result = await buildRoutingTable({
+        projectDir: dir,
+        liveModelIDs: live,
+        goCaps: caps.caps,
+        notes: caps.note ? [caps.note] : [],
+      })
       cached = result
       cachedAt = now
       catalogById = new Map(result.catalog.map((m) => [m.id, m]))
@@ -244,7 +284,7 @@ export const RouterPlugin = Plugin.define({
     /** A usage-limit error on a subscription model limits the shared allowance; other limits bench one model. */
     async function coolDown(modelId: string, error: unknown, reason: string): Promise<void> {
       if (isUsageLimitError(error) && usesAllowance(await ensure(), modelId)) {
-        ledger.cooldownAllowance(RATE_LIMIT_COOLDOWN_MS, "Go usage limit")
+        ledger.cooldownAllowance(usageLimitCooldownMs(error), "Go usage limit")
       } else if (isRateLimitError(error)) {
         ledger.cooldown(modelId, RATE_LIMIT_COOLDOWN_MS, reason)
       }
@@ -272,8 +312,8 @@ export const RouterPlugin = Plugin.define({
      * apply marker is written only after the reloads it describes: on failure
      * it says the table applies on the next message instead.
      */
-    async function applyRouting(): Promise<void> {
-      const result = await ensure(true)
+    async function applyRouting(force = true): Promise<void> {
+      const result = await ensure(force)
       const body = routingConfigBody(result.table)
       agentModels = {}
       for (const [agent, spec] of Object.entries(body.agent)) {
@@ -314,7 +354,7 @@ export const RouterPlugin = Plugin.define({
 
     const mode = () => cached?.cfg.mode ?? "auto"
 
-    await applyRouting()
+    await applyRouting(false)
 
     // Transform editors replay the captured routing output; the transforms must
     // stay cheap and synchronous, so they read local state only.

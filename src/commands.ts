@@ -11,8 +11,8 @@ export interface SlashCommand {
 /** The slash commands, shared by the plugin and `opencode-router install`. */
 export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { name: "refresh-routing", description: "Recompute and apply OpenCode model routing", args: "refresh" },
-  { name: "routing-status", description: "Show the model in use per role and its 5-hour quota use", args: "status" },
-  { name: "routing-plan", description: "Switch the routing plan (go | go-plus | free) and rebuild", args: "plan $ARGUMENTS" },
+  { name: "routing-status", description: "Show the model in use per role and the Go allowance", args: "status" },
+  { name: "routing-plan", description: "Switch the routing plan (go | go-plus | go-teams | free) and rebuild", args: "plan $ARGUMENTS" },
   { name: "routing-eval", description: "Run the router scoring stress test", args: "eval" },
   { name: "routing-update", description: "Update opencode-router to the newest version", args: "update" },
 ]

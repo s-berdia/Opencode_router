@@ -1,6 +1,7 @@
 import { isPlan, isRoleName, isRouterMode, PLAN_PROFILES, ROUTER_MODES } from "./types.js"
 import type { CatalogModel, PlanProfile, ResolvedConfig, RouterUserConfig } from "./types.js"
 import { globalRouterConfigFile, isPlainObject, projectRouterConfigFile, readJsonFile } from "./paths.js"
+import { GO_DOCS_URL } from "./go-caps.js"
 
 const DEFAULT_SOFT_THRESHOLD = 0.85
 const DEFAULT_CHAIN_DEPTH = 4
@@ -59,6 +60,10 @@ function sanitizeUserConfig(raw: Record<string, unknown>, file: string, notes: s
     drop("softThreshold", "must be a number above 0 and at most 1")
   }
   if (config.updateCheck !== undefined && typeof config.updateCheck !== "boolean") drop("updateCheck", "must be true or false")
+  if (config.zenPaid !== undefined && typeof config.zenPaid !== "boolean") drop("zenPaid", "must be true or false")
+  sanitizePrivacy(config, file, notes)
+  sanitizeCaps(config, file, notes)
+  sanitizeAllowance(config, file, notes)
   for (const key of ["denyModels", "allowModels"]) {
     const list = config[key]
     if (list !== undefined && !(Array.isArray(list) && list.every((item) => typeof item === "string"))) {
@@ -81,6 +86,70 @@ function sanitizeUserConfig(raw: Record<string, unknown>, file: string, notes: s
   }
   sanitizeStatus(config, file, notes)
   return config as RouterUserConfig
+}
+
+/** The `privacy` block: booleans the router can act on. */
+function sanitizePrivacy(config: Record<string, unknown>, file: string, notes: string[]): void {
+  const raw = config.privacy
+  if (raw === undefined) return
+  if (!isPlainObject(raw)) {
+    notes.push(`${file}: "privacy" must be an object; it was ignored.`)
+    delete config.privacy
+    return
+  }
+  const privacy: Record<string, unknown> = { ...raw }
+  for (const key of ["freeModelsOk", "trainingOk"]) {
+    if (privacy[key] !== undefined && typeof privacy[key] !== "boolean") {
+      notes.push(`${file}: "privacy.${key}" must be true or false, not ${JSON.stringify(privacy[key])}; it was ignored.`)
+      delete privacy[key]
+    }
+  }
+  config.privacy = privacy
+}
+
+/** The `caps` block: a URL and a positive cache lifetime. */
+function sanitizeCaps(config: Record<string, unknown>, file: string, notes: string[]): void {
+  const raw = config.caps
+  if (raw === undefined) return
+  if (!isPlainObject(raw)) {
+    notes.push(`${file}: "caps" must be an object; it was ignored.`)
+    delete config.caps
+    return
+  }
+  const caps: Record<string, unknown> = { ...raw }
+  if (caps.fetch !== undefined && typeof caps.fetch !== "boolean") {
+    notes.push(`${file}: "caps.fetch" must be true or false, not ${JSON.stringify(caps.fetch)}; it was ignored.`)
+    delete caps.fetch
+  }
+  if (caps.ttlHours !== undefined && !(typeof caps.ttlHours === "number" && caps.ttlHours > 0)) {
+    notes.push(`${file}: "caps.ttlHours" must be a positive number, not ${JSON.stringify(caps.ttlHours)}; it was ignored.`)
+    delete caps.ttlHours
+  }
+  if (caps.url !== undefined && typeof caps.url !== "string") {
+    notes.push(`${file}: "caps.url" must be a URL string, not ${JSON.stringify(caps.url)}; it was ignored.`)
+    delete caps.url
+  }
+  config.caps = caps
+}
+
+/** The `allowance` block: ISO timestamps for the console's window starts. */
+function sanitizeAllowance(config: Record<string, unknown>, file: string, notes: string[]): void {
+  const raw = config.allowance
+  if (raw === undefined) return
+  if (!isPlainObject(raw)) {
+    notes.push(`${file}: "allowance" must be an object; it was ignored.`)
+    delete config.allowance
+    return
+  }
+  const allowance: Record<string, unknown> = { ...raw }
+  for (const key of ["weekStart", "monthStart"]) {
+    const value = allowance[key]
+    if (value !== undefined && !(typeof value === "string" && Number.isFinite(Date.parse(value)))) {
+      notes.push(`${file}: "allowance.${key}" must be an ISO date, not ${JSON.stringify(value)}; it was ignored.`)
+      delete allowance[key]
+    }
+  }
+  config.allowance = allowance
 }
 
 /** The `status` block: only values this router can act on survive. */
@@ -134,6 +203,9 @@ export function mergeUserConfig(base: RouterUserConfig, override: RouterUserConf
     roles: mergeByKey(base.roles, override.roles),
     scores: mergeByKey(base.scores, override.scores),
     privacy: { ...base.privacy, ...override.privacy },
+    caps: { ...base.caps, ...override.caps },
+    allowance: { ...base.allowance, ...override.allowance },
+    zenPaid: override.zenPaid ?? base.zenPaid,
     feeds: { ...base.feeds, ...override.feeds },
     status: { ...base.status, ...override.status },
     denyModels: override.denyModels ?? base.denyModels,
@@ -141,7 +213,10 @@ export function mergeUserConfig(base: RouterUserConfig, override: RouterUserConf
   }
 }
 
-/** Detect the best-matching plan profile from the models actually available. */
+/**
+ * Detect free vs Go from the models actually available. A Go, Go Plus, and Go Teams
+ * account has the same catalog, so the paid tier must come from `plan` or the console.
+ */
 export function detectPlan(catalog: CatalogModel[]): PlanProfile {
   const hasGo = catalog.some((m) => m.providerID === "opencode-go" && !m.free)
   if (hasGo) return "go"
@@ -169,7 +244,20 @@ export function resolveConfig(user: RouterUserConfig, catalog: CatalogModel[], c
     },
     denyModels: user.denyModels ?? [],
     allowModels: user.allowModels ?? [],
-    privacy: { freeModelsOk: user.privacy?.freeModelsOk ?? true },
+    zenPaid: user.zenPaid ?? false,
+    privacy: {
+      freeModelsOk: user.privacy?.freeModelsOk ?? true,
+      trainingOk: user.privacy?.trainingOk ?? true,
+    },
+    caps: {
+      fetch: user.caps?.fetch ?? true,
+      ttlHours: user.caps?.ttlHours ?? 24,
+      url: user.caps?.url ?? GO_DOCS_URL,
+    },
+    allowance: {
+      weekStart: user.allowance?.weekStart,
+      monthStart: user.allowance?.monthStart,
+    },
     status: {
       ...user.status,
       // On by default: the endpoint is public, cached for five minutes, and a

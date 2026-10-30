@@ -35,8 +35,8 @@ Make sure that you have these items:
 
    The result must be `v20` or higher. If the command fails, install Node.js from
    <https://nodejs.org> (use the LTS version), then open a new terminal.
-3. **An OpenCode plan:** Go, Go Plus, or no subscription. With no subscription, the router
-   uses only free models.
+3. **An OpenCode plan:** Go, Go Plus, Go Teams, or no subscription. With no subscription,
+   the router uses only free models.
 
 `~` means your home folder. On Windows, this is `C:\Users\<your-user-name>`.
 
@@ -157,8 +157,8 @@ message automatically.
 ## 4. Read the scorecard
 
 The scorecard has one block of rows for each role. The first row of a block is the model
-that the role uses. The other rows are the failover models, in sequence. On Go and Go
-Plus, the last row of each agent is a free model (see
+that the role uses. The other rows are the failover models, in sequence. On Go, Go Plus,
+and Go Teams, the last row of each agent is usually a free model (see
 [How the router changes models](#how-the-router-changes-models)).
 
 | Column | Meaning |
@@ -173,7 +173,7 @@ Plus, the last row of each agent is a free model (see
 | Endur | Endurance score, 0 to 100. A high value means that the model uses the Go allowance slowly |
 | Tokens/5h | The estimated number of tokens in 5 hours if the agent uses only this model. `unlimited` means no limit |
 | Cap/mo | The monthly limit of the model on your plan. `inf` means no limit |
-| Class | `go` = included in your Go subscription. `free*` = free (your data can be collected). `paid` = Zen pay-as-you-go |
+| Class | `go` = included in your Go subscription. `free*` = $0 (check the model's data policy). `paid` = Zen pay-as-you-go |
 
 The **Notes** section under the table shows problems, for example a missing catalog.
 
@@ -183,18 +183,30 @@ The **Notes** section under the table shows problems, for example a missing cata
   cost of the message, priced per token kind (input, output, reasoning as output, cache
   read, and cache write) with the prices in your OpenCode model catalog, divided by the
   monthly limit of its model (`Cap/mo`). A model with a low limit uses the allowance
-  faster. This matches the `usage.opencode.allowance` that the Go API reports; a blended
+  faster. This matches the `opencode.allowance` that the Go API reports; a blended
   per-million-token estimate overstates cache-heavy turns by an order of magnitude.
-- The allowance has 3 windows: 5 hours (20% of the monthly allowance), 7 days (50%), and
-  30 days (100%). The router estimates the use in each window from the messages that it
-  records.
+- The monthly caps and data policies are fetched from the
+  [Go documentation](https://opencode.ai/v2/docs/console/go) during `refresh`, `status`,
+  `plan`, and `eval`, and once per day by the plugin. The fetched table is cached in
+  `router/go-caps.json`; use `--offline` or `"caps": { "fetch": false }` to keep the
+  cached/bundled copy. New or changed models are scored with the new caps immediately.
+- The allowance has 3 windows: rolling 5 hours (20% of the monthly allowance), weekly
+  (50%), and monthly (100%). The 5-hour window starts with the first Go request and
+  resets 5 hours later. The weekly and monthly windows repeat on the same day/time. Set
+  `allowance.weekStart` and `allowance.monthStart` to the console's reset timestamps for
+  exact boundaries. Without them, the router anchors the current window at the first
+  recorded step.
 - When the use in a window reaches `softThreshold` (default 85%), the `plan`, `build`,
   `general`, and `explore` agents use the free model at the end of their list. When the
   use falls under the threshold again, they go back to their first model.
-- After a usage-limit error from a `go` model, the router stops all `go` models for
-  1 hour. The agents use their free models in that time.
+- After a usage-limit error from a `go` model, the router stops all `go` models until the
+  reset named in the error (`Resets in 40min`, or the weekly/monthly window). The agents
+  use their free models in that time.
 - After a different rate-limit or overload error, the router stops only that model for
   1 hour. The agent uses the next model in its list.
+- The estimate counts the messages that this OpenCode installation records. The Go
+  meter is workspace-wide: the same API key in another client or computer is not
+  included. The console usage page is authoritative.
 
 `/routing-status` shows the estimated use of the allowance and the state of each agent:
 
@@ -207,22 +219,25 @@ The **Notes** section under the table shows problems, for example a missing cata
 
 ## 5. Select your plan
 
-The router finds your plan from the models in your catalog. If it selects the wrong plan,
-set the plan:
+The router can tell whether you have Go models, but it cannot tell a Go subscription
+from Go Plus or Go Teams. It uses `go` by default. Set the plan if you subscribe to Plus
+or Teams:
 
 | Plan | Models the router may use |
 | :-- | :-- |
 | `free` | `opencode/*` models with `free: true` only |
 | `go` | every `opencode-go/*` model, plus `opencode/*` $0 models |
-| `go-plus` | the Go tier, plus paid `opencode/*` (pay-as-you-go) models |
+| `go-plus` | Go Plus caps, plus `opencode/*` $0 models |
+| `go-teams` | Go Teams caps, plus `opencode/*` $0 models |
 
-A paid `opencode/*` model is never eligible on `go` or `free`. On `go-plus` it is
-metered per token, not taken from the shared Go allowance.
+Paid `opencode/*` models are **not** part of Go Plus or Go Teams. They are Zen
+pay-as-you-go and need `"zenPaid": true` plus a Console balance; their use is metered per
+token, not taken from the shared Go allowance.
 
-In OpenCode, type the command with your plan (`go`, `go-plus`, or `free`):
+In OpenCode, type the command with your plan (`go`, `go-plus`, `go-teams`, or `free`):
 
 ```text
-/routing-plan go-plus
+/routing-plan go-teams
 ```
 
 The router saves the plan in `~/.config/opencode/router.config.json`, calculates the
@@ -262,6 +277,21 @@ use free models.
 With this setting, these agents have no free model at the end of their list. When the
 Go allowance runs out, they stop until it resets.
 
+### Keep your work off models that train on it
+
+Some models are paid but still train on request data, for example the Muse Spark
+Contributor models. `trainingOk` is separate from `freeModelsOk` and covers paid and free
+models:
+
+```json
+{
+  "privacy": { "trainingOk": false }
+}
+```
+
+The default is `true` to preserve the normal routing behavior. The status and scorecard
+add a **Data policy** note when an active model trains on request data.
+
 ### Never use some models
 
 `*` matches any text. `?` matches one character.
@@ -285,8 +315,9 @@ If `allowModels` is not empty, the router uses only the models in the list.
 ### Change models earlier or later
 
 `softThreshold` sets when the agents change to their free model. `0.7` changes when the
-use of the shared Go allowance reaches 70% in one of its windows (5 hours, 7 days, or
-30 days). The default is `0.85`.
+use of the shared Go allowance reaches 70% in one of its windows (rolling 5 hours,
+weekly, or monthly). The default is `0.85`; the real Go limit is 100%, so the default
+leaves a 15% safety margin.
 
 ```json
 {
@@ -343,8 +374,8 @@ Use this setting when you know that a model is better or worse than its score.
 
 `chainDepth` sets the number of models in each failover list. The default is 4 for the
 agents and 3 for the internal helpers. A value under `roles.<role>` wins over the
-top-level value. On Go and Go Plus, the last model of each list is a free model, if your
-privacy setting permits free models.
+top-level value. On Go, Go Plus, and Go Teams, the last model of each list is usually a
+free model, if your privacy setting permits free models.
 
 ```json
 {
@@ -391,16 +422,52 @@ models of that family.
 }
 ```
 
-### Stop the update check
+### Stop the network checks
 
-Once each 24 hours, the router asks npm for the newest version number of the router. It
-sends one request to `registry.npmjs.org` and no other data. When a newer version is
-available, the router shows a toast in OpenCode and a line under the status and the
-scorecard. To stop the check:
+The router fetches the public Go docs page during `refresh`, `status`, `plan`, and
+`eval`, and once per day from the plugin. It sends no prompts or account data. To use
+only the cached/bundled cap table, set:
+
+```json
+{
+  "caps": { "fetch": false }
+}
+```
+
+Once each 24 hours, the router also asks npm for the newest version number. It sends one
+request to `registry.npmjs.org` and no other data. When a newer version is available, the
+router shows a toast in OpenCode and a line under the status and the scorecard. To stop
+the check:
 
 ```json
 {
   "updateCheck": false
+}
+```
+
+### Cap fetching and window boundaries
+
+| Key | Default | Meaning |
+| :-- | :-- | :-- |
+| `caps.fetch` | `true` | Fetch the Go monthly caps and data policies from the docs |
+| `caps.ttlHours` | `24` | Use the cached cap table for this many hours |
+| `caps.url` | Go docs URL | A different page with the same pricing tables |
+| `allowance.weekStart` | first recorded step | ISO start of the current weekly window; repeats every 7 days |
+| `allowance.monthStart` | first recorded step | ISO start of the current monthly window; repeats on the same day/time |
+
+The router fetches the docs during `refresh`, `status`, `plan`, and `eval`, and once per
+day from the plugin. The cache is `~/.config/opencode/router/go-caps.json`. If a model
+appears in the docs but not in the local catalog it is still scored once the catalog
+updates; a live paid model with no cap is reported in the notes and is not routed.
+
+To match the console exactly, copy its window start timestamps:
+
+```json
+{
+  "allowance": {
+    "weekStart": "2026-10-25T23:57:00Z",
+    "monthStart": "2026-10-26T19:57:00Z"
+  }
 }
 ```
 
@@ -414,8 +481,9 @@ scorecard. To stop the check:
 | `enduranceScale.minTokensPer5h` | `0.25` | Millions of tokens per 5 hours that give endurance 0 |
 | `enduranceScale.maxTokensPer5h` | `40` | Millions of tokens per 5 hours that give endurance 100 |
 
-The default scores, weights, and monthly allowances are in
-[`model-scores.json`](./model-scores.json).
+The default scores, weights, and fallback monthly caps are in
+[`model-scores.json`](./model-scores.json). The fetched `go-caps.json` overrides those
+caps at runtime.
 
 ## 7. Use the terminal tool
 
@@ -444,8 +512,9 @@ These commands work in PowerShell, CMD, Git Bash, macOS, and Linux.
 | `opencode-router refresh --scope global` | Write the routing table to the global `opencode.json` |
 | `opencode-router refresh --scope project` | Write the routing table to `opencode.json` in the current folder |
 | `opencode-router refresh --plan free` | Use the `free` profile for this run only |
+| `opencode-router refresh --offline` | Use the cached/bundled Go cap table; fetch nothing |
 | `opencode-router refresh --json` | Print the result as JSON |
-| `opencode-router status` | Show the model in use for each role (after failover) and the estimated use of the Go allowance |
+| `opencode-router status` | Show the model in use for each role (after failover) and the estimated use of the Go allowance; refreshes stale caps |
 | `opencode-router scores --top` | Show where the committed scores come from and the winning model per archetype |
 | `opencode-router scores --write` | Regenerate `model-scores.json` from public benchmarks |
 | `opencode-router scores --check` | Exit 1 when the committed scores are out of date |
@@ -526,7 +595,8 @@ The router writes these files:
 
 | File | Written by | Contents |
 | :-- | :-- | :-- |
-| `~/.config/opencode/router/ledger.json` | Plugin | Spend and tokens per model, the use of the shared Go allowance in the last 30 days, and cooldowns |
+| `~/.config/opencode/router/ledger.json` | Plugin | Spend and tokens per model, the shared Go allowance buckets and window starts, and cooldowns |
+| `~/.config/opencode/router/go-caps.json` | `refresh`, `status`, `plan`, `eval`, plugin | The fetched Go monthly caps and data policies |
 | `~/.config/opencode/router/routing-table.json` | Plugin | The last routing table |
 | `~/.config/opencode/router/last-apply.json` | Plugin | What the last apply did: what reloaded, or "applies on the next message" |
 | `~/.config/opencode/router/eval-report.md` | `/routing-eval` | The test report |
@@ -563,7 +633,7 @@ Do not commit the `router/` folder. It contains your usage data.
 
 ## 11. Known limits
 
-These are the limits of version 1.3.0.
+These are the limits of version 1.4.0.
 
 1. The router sets the model of the `plan`, `build`, `general`, and `explore` agents at
    each message. If you select a different model by hand, the router replaces it. To
@@ -573,19 +643,32 @@ These are the limits of version 1.3.0.
 3. The slash commands always write the global files (`~/.config/opencode/`). To write the
    files of one project, use the terminal tool with `--scope project`.
 4. The slash commands need Node.js 20 or later on the `PATH`.
-5. Use numbers are estimates. The router counts only the messages that it records. Use
-   from another computer is not included. A ledger written before version 1.3.1 is reset
-   once: those versions used a blended per-million price, which overstated cache-heavy
-   turns; cooldowns survive the reset. If two OpenCode windows write at the same moment,
-   one record can be lost.
-6. The router treats the 3 windows as rolling windows. If OpenCode resets a window at a
-   fixed time, the estimate can differ from the console.
-7. After a usage-limit error, all `go` models go into a 1-hour cooldown. After a
-   different rate-limit or overload error, only that model goes into a cooldown.
-8. With `"privacy": { "freeModelsOk": false }`, the `plan`, `build`, and `general` agents
+5. Use numbers are estimates. The router counts only the messages that this OpenCode
+   installation records. The Go meter is workspace-wide, so use from another computer or
+   another client (Claude Code, Codex, etc.) is not included. The console usage page is
+   authoritative. A ledger written before version 1.3.1 is reset once: those versions
+   used a blended per-million price, which overstated cache-heavy turns; cooldowns
+   survive the reset. If two OpenCode windows write at the same moment, one record can be
+   lost.
+6. The 5-hour window is anchored at the first Go request; weekly and monthly repeat on
+   the same day/time. Set `allowance.weekStart` and `allowance.monthStart` to the
+   console's timestamps for exact boundaries. Without them, the router anchors the
+   current window at the first recorded step, so the reset can differ by the time between
+   your subscription and your first Go message.
+7. The monthly caps are fetched from the Go docs. If the docs are unreachable, the
+   bundled `model-scores.json` caps apply. A live paid model with no cap is reported in
+   the notes and is not routed. Use `--offline` to skip the fetch.
+8. After a usage-limit error, all `go` models go into a cooldown until the reset named in
+   the error (or the weekly/monthly window). After a different rate-limit or overload
+   error, only that model goes into a cooldown.
+9. With `"privacy": { "freeModelsOk": false }`, the `plan`, `build`, and `general` agents
    have no free model. When the Go allowance runs out, they stop until it resets.
-9. The router does not know about **Extra usage** in the OpenCode console. It moves the
-   agents to free models at the threshold, also when Extra usage is on.
+10. `"privacy": { "trainingOk": false }` also excludes paid models that train on request
+    data, such as the Muse Spark Contributor models. The default is `true`, so read each
+    model's data policy before you use it for confidential work.
+11. The router does not know about **Extra usage** in the OpenCode console. It moves the
+    agents to free models at the threshold, also when Extra usage is on. If Extra usage
+    is on, Go can bill your Console balance after the shared meter is exhausted.
 
 ## 12. Update the router
 

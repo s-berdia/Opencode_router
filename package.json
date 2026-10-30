@@ -1,6 +1,6 @@
 {
   "name": "@s-berdia/opencode-router",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Early-development automatic model routing and quota failover for OpenCode Go, Go Plus, Go Teams, and Free. Expect bugs; issues and contributions welcome.",
   "type": "module",
   "license": "MIT",

@@ -637,7 +637,7 @@ Do not commit the `router/` folder. It contains your usage data.
 
 ## 11. Known limits
 
-These are the limits of version 1.4.0.
+These are the limits of version 1.4.1.
 
 1. The router sets the model of the `plan`, `build`, `general`, and `explore` agents at
    each message. If you select a different model by hand, the router replaces it. To
